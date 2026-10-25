@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.tmp/
+.ruff_cache/
+.coverage
+
+# Node
+tui/node_modules/
+tui/dist/
+
+# Local
+.env
+EXHIBIT_REPORT.md

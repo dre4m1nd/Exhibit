@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "exhibit"
+version = "0.1.0"
+description = "A terminal agent that maps a project's architecture and reviews code."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "agentscope==2.0.10",
+]
+
+[project.scripts]
+exhibit-agent = "agent.app:main"
+
+[tool.setuptools]
+packages = ["agent", "agent.tools"]
+
+[tool.setuptools.package-data]
+agent = ["prompts/*.md"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]

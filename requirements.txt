@@ -1,0 +1,2 @@
+agentscope==2.0.10
+pytest>=8.0

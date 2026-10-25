@@ -1,0 +1,28 @@
+{
+  "name": "exhibit-tui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Terminal UI for the Exhibit agent",
+  "type": "module",
+  "bin": {
+    "exhibit": "dist/main.js"
+  },
+  "scripts": {
+    "dev": "tsx src/main.tsx",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "ink": "^8.0.0",
+    "react": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.0.0"
+  }
+}
