@@ -15,3 +15,7 @@ tui/dist/
 # Local
 .env
 EXHIBIT_REPORT.md
+
+# Internal planning documents
+任务规划书.md
+任务执行计划书.md
