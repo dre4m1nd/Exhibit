@@ -1,6 +1,7 @@
 /** Spawns the Python agent subprocess and forwards its protocol events. */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -8,22 +9,38 @@ import { parseLine } from "./protocol.js";
 import type { AgentMessage } from "./protocol.js";
 
 export interface BridgeOptions {
-  task: string;
-  params: {
-    repoPath: string;
-    branch?: string;
-    commitRange?: string;
-    model?: string;
-  };
+  repoPath: string;
   onMessage: (message: AgentMessage) => void;
   onError: (error: Error) => void;
   onExit?: (code: number | null) => void;
 }
 
-/** Locate the repository root (two levels up from dist/ or src/). */
-export function findRepoRoot(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, "..", "..");
+export interface AgentBridge {
+  sendChat: (text: string) => void;
+  sendCommand: (name: string, args?: Record<string, unknown>) => void;
+  sendPermission: (
+    requestId: string,
+    approved: boolean,
+    scope?: "once" | "session",
+  ) => void;
+  stop: () => void;
+}
+
+/** Locate Exhibit's installation root, independent of the target repository. */
+export function findInstallRoot(): string {
+  const override = process.env.EXHIBIT_HOME?.trim();
+  if (override) return path.resolve(override);
+
+  const entry = realpathSync(fileURLToPath(import.meta.url));
+  let current = path.dirname(entry);
+  while (true) {
+    if (existsSync(path.join(current, "agent", "app.py"))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  // Keep a deterministic fallback for a partially installed package.
+  return path.resolve(path.dirname(entry), "..", "..");
 }
 
 /** Resolve the python interpreter of the project's virtualenv. */
@@ -36,20 +53,34 @@ export function resolvePython(repoRoot: string): string {
   return venvPython;
 }
 
+/** Arguments passed to the Python module, including the target repository. */
+export function buildAgentArgs(repoPath: string): string[] {
+  return ["-u", "-m", "agent.app", "--repo-path", path.resolve(repoPath)];
+}
+
 /** Start the agent and return the subprocess handle. */
-export function startAgent(options: BridgeOptions): ChildProcess {
-  const repoRoot = findRepoRoot();
-  const python = resolvePython(repoRoot);
-  const agentEntry = path.join(repoRoot, "agent", "app.py");
+function writeLine(child: ChildProcess, message: Record<string, unknown>): void {
+  if (!child.stdin?.writable) return;
+  child.stdin.write(`${JSON.stringify(message)}\n`);
+}
+
+/** Start one long-lived agent process for the whole conversation. */
+export function startAgent(options: BridgeOptions): AgentBridge {
+  const installRoot = findInstallRoot();
+  const python = resolvePython(installRoot);
+  const repoPath = path.resolve(options.repoPath);
 
   const child = spawn(
     python,
-    ["-u", "-m", "agent.app"],
+    buildAgentArgs(repoPath),
     {
-      cwd: repoRoot,
+      // The module lives in the install root; the reviewed directory is passed
+      // explicitly so launching from another project cannot change imports.
+      cwd: installRoot,
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
+        EXHIBIT_REPO_ROOT: repoPath,
         PYTHONIOENCODING: "utf-8",
         PYTHONUNBUFFERED: "1",
       },
@@ -74,17 +105,23 @@ export function startAgent(options: BridgeOptions): ChildProcess {
     options.onExit?.(code);
   });
 
-  const init = {
-    type: "init",
-    task: options.task,
-    params: {
-      repo_path: options.params.repoPath,
-      branch: options.params.branch ?? null,
-      commit_range: options.params.commitRange ?? null,
-      model: options.params.model ?? null,
+  return {
+    sendChat(text: string) {
+      writeLine(child, { type: "chat", text });
+    },
+    sendCommand(name: string, args: Record<string, unknown> = {}) {
+      writeLine(child, { type: "command", name, args });
+    },
+    sendPermission(requestId: string, approved: boolean, scope: "once" | "session" = "once") {
+      writeLine(child, {
+        type: "permission_response",
+        request_id: requestId,
+        approved,
+        scope,
+      });
+    },
+    stop() {
+      child.kill();
     },
   };
-  child.stdin?.write(`${JSON.stringify(init)}\n`);
-
-  return child;
 }

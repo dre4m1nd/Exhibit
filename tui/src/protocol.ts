@@ -24,7 +24,20 @@ export type AgentMessage =
   | { type: "reset" }
   | { type: "report"; markdown: string }
   | { type: "error"; message: string }
-  | { type: "done" };
+  | { type: "done" }
+  | { type: "chat_delta"; text: string }
+  | { type: "chat_done"; text: string }
+  | { type: "command_result"; name: string; data: Record<string, unknown> }
+  | {
+      type: "permission_request";
+      request_id: string;
+      path: string;
+      action: string;
+      summary: string;
+     session_id: string;
+     trusted: boolean;
+    }
+  | { type: "session"; data: Record<string, unknown> };
 
 /** Parse one stdout line; unknown or malformed lines are dropped. */
 export function parseLine(line: string): AgentMessage | null {
@@ -64,6 +77,31 @@ export function parseLine(line: string): AgentMessage | null {
         return { type, message: String(record.message ?? "") };
       case "done":
         return { type };
+      case "chat_delta":
+        return { type, text: String(record.text ?? "") };
+      case "chat_done":
+        return { type, text: String(record.text ?? "") };
+      case "command_result":
+        return {
+          type,
+          name: String(record.name ?? ""),
+          data: (record.data as Record<string, unknown>) ?? {},
+        };
+      case "permission_request":
+        return {
+          type,
+          request_id: String(record.request_id ?? ""),
+          path: String(record.path ?? ""),
+          action: String(record.action ?? ""),
+          summary: String(record.summary ?? ""),
+          session_id: String(record.session_id ?? "main"),
+          trusted: Boolean(record.trusted),
+        };
+      case "session":
+        return {
+          type,
+          data: (record.data as Record<string, unknown>) ?? {},
+        };
       default:
         return null;
     }

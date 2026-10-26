@@ -10,6 +10,7 @@ import pytest
 
 from agent.prompt_loader import (
     clear_prompt_cache,
+    get_chat_prompt,
     get_system_prompt,
     get_user_prompt,
     prompt_dir,
@@ -47,7 +48,9 @@ def test_system_prompt_loads_each_task(task: str, heading: str) -> None:
     prompt = get_system_prompt(task)
     assert heading in prompt
     assert "报告要求：" in prompt
-    assert prompt.endswith("不要输出与报告无关的寒暄。")
+    assert prompt.endswith(
+        "报告作为聊天中的一轮回复输出，不要求生成独立报告页或等待额外确认。"
+    )
 
 
 def test_prompt_files_cover_all_tasks() -> None:
@@ -71,7 +74,7 @@ def test_user_prompt_defaults_to_working_tree() -> None:
     assert prompt == (
         "目标仓库路径：D:/repo\n"
         "审查范围：工作区未提交的改动（git status + git diff）\n"
-        "请开始分析，并在结束时给出完整的 Markdown 报告。"
+        "请开始只读分析，并将完整的 Markdown 报告作为本轮聊天回复输出。"
     )
 
 
@@ -96,7 +99,23 @@ def test_non_git_task_has_no_scope_line() -> None:
         {"repo_path": ".", "commit_range": "HEAD~1..HEAD"},
     )
     assert "审查范围：" not in prompt
-    assert "请开始分析" in prompt
+    assert "请开始只读分析" in prompt
+
+
+def test_plan_prompt_is_read_only_without_edit_rules() -> None:
+    prompt = get_chat_prompt(mode="plan", context="用户目标")
+
+    assert "严格只读" in prompt
+    assert "用户目标" in prompt
+    assert "/undo" in prompt
+    assert "文件编辑规则：" not in prompt
+
+
+def test_agent_prompt_includes_edit_rules() -> None:
+    prompt = get_chat_prompt(mode="agent", context="用户目标")
+
+    assert "文件编辑规则：" in prompt
+    assert "等待用户确认" in prompt
 
 
 def test_prompt_directory_can_be_overridden(

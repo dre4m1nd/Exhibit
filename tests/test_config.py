@@ -6,15 +6,18 @@ from __future__ import annotations
 import pytest
 
 from agent.config import DEFAULT_BASE_URL, DEFAULT_MODEL, load_config
+from agent.credentials import CONFIG_ENV, save_credential
 
 
 @pytest.fixture(autouse=True)
-def clear_exhibit_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def clear_exhibit_env(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep tests independent from the developer's environment."""
+    monkeypatch.setenv(CONFIG_ENV, str(tmp_path / "config"))
     for name in (
         "EXHIBIT_API_KEY",
         "EXHIBIT_BASE_URL",
         "EXHIBIT_MODEL",
+        "EXHIBIT_PROVIDER",
         "EXHIBIT_MAX_ITERS",
         "EXHIBIT_TIMEOUT",
     ):
@@ -60,6 +63,64 @@ def test_valid_remote_configuration_is_loaded(
     assert config.model == "review-model"
     assert config.max_iters == 12
     assert config.request_timeout == 30.5
+
+
+def test_single_saved_credential_is_used_without_env_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    save_credential("deepseek", "sk-saved-1234567890")
+
+    config = load_config()
+
+    assert config.base_url == "https://api.deepseek.com/v1"
+    assert config.api_key == "sk-saved-1234567890"
+    assert config.model == "deepseek-chat"
+
+
+def test_environment_overrides_saved_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    save_credential("deepseek", "sk-saved-1234567890")
+    monkeypatch.setenv("EXHIBIT_API_KEY", "sk-env-1234567890")
+    monkeypatch.setenv("EXHIBIT_MODEL", "env-model")
+
+    config = load_config()
+
+    assert config.base_url == DEFAULT_BASE_URL
+    assert config.api_key == "sk-env-1234567890"
+    assert config.model == "env-model"
+
+
+def test_multiple_saved_providers_require_explicit_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    save_credential("openai", "sk-openai-1234567890")
+    save_credential("deepseek", "sk-deepseek-1234567890")
+
+    with pytest.raises(ValueError, match="EXHIBIT_PROVIDER"):
+        load_config()
+
+    monkeypatch.setenv("EXHIBIT_PROVIDER", "deepseek")
+    config = load_config()
+    assert config.api_key == "sk-deepseek-1234567890"
+    assert config.model == "deepseek-chat"
+
+
+def test_custom_endpoint_can_be_selected_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    save_credential(
+        "openai",
+        "sk-custom-1234567890",
+        model="custom-model",
+        base_url="https://gateway.example.com/v1",
+    )
+    monkeypatch.setenv("EXHIBIT_PROVIDER", "custom")
+
+    config = load_config()
+
+    assert config.base_url == "https://gateway.example.com/v1"
+    assert config.model == "custom-model"
 
 
 @pytest.mark.parametrize(

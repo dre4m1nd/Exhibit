@@ -54,11 +54,24 @@ def test_emitter_writes_one_json_object_per_line() -> None:
     stream = io.StringIO()
     emitter = Emitter(stream)
     emitter.status("scanning", "准备")
+    emitter.chat_delta("你好")
+    emitter.chat_done("你好")
+    emitter.command_result("/status", {"mode": "plan"})
+    emitter.permission_request(
+        "p1", "a.py", "覆盖", "1 → 2 行", session_id="fork-01"
+    )
+    emitter.session({"session": "main"})
     emitter.done()
     lines = stream.getvalue().strip().split("\n")
-    assert len(lines) == 2
+    assert len(lines) == 7
     assert json.loads(lines[0])["type"] == "status"
-    assert json.loads(lines[1])["type"] == "done"
+    assert json.loads(lines[1])["type"] == "chat_delta"
+    assert json.loads(lines[2])["type"] == "chat_done"
+    assert json.loads(lines[3])["type"] == "command_result"
+    assert json.loads(lines[4])["type"] == "permission_request"
+    assert json.loads(lines[4])["session_id"] == "fork-01"
+    assert json.loads(lines[5])["type"] == "session"
+    assert json.loads(lines[6])["type"] == "done"
 
 
 def test_init_constant() -> None:

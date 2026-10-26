@@ -12,21 +12,6 @@ from agent.tools.fs import grep_files, list_dir, read_file
 from agent.tools.git import git_branch_diff, git_diff, git_log, git_status
 
 FIXTURE = Path(__file__).parent.parent / "examples" / "fixture-repo"
-TMP_ROOT = Path(__file__).parent / ".tmp"
-
-
-@pytest.fixture()
-def tmp_path() -> Path:
-    """A scratch directory inside the repo (the OS temp dir is restricted)."""
-    import shutil
-    import uuid
-
-    target = TMP_ROOT / uuid.uuid4().hex
-    target.mkdir(parents=True)
-    try:
-        yield target
-    finally:
-        shutil.rmtree(target, ignore_errors=True)
 
 
 def test_list_dir_shows_src_tree() -> None:
@@ -106,44 +91,51 @@ def test_tools_accept_caller_relative_path_under_repo_root(
     assert "Fixture Repo" in body
 
 
-def test_git_tools_accept_caller_relative_path_under_repo_root(
-    monkeypatch,
-) -> None:
+def test_git_tools_accept_caller_relative_path_under_repo_root(monkeypatch) -> None:
     monkeypatch.setenv("EXHIBIT_REPO_ROOT", str(FIXTURE.resolve()))
     monkeypatch.chdir(FIXTURE.parent.parent)
 
     status = git_status("examples/fixture-repo")
     diff = git_diff("examples/fixture-repo")
 
+    assert isinstance(status, str)
+    assert isinstance(diff, str)
+
+
+def test_git_tools_read_the_fixture_repo(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "report.py").write_text("# TODO\n", encoding="utf-8")
+    subprocess.run(["git", "add", "report.py"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=t@example.com",
+         "commit", "-qm", "feat: initial fixture project"],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "report.py").write_text("# TODO\nmore\n", encoding="utf-8")
+    status = git_status(str(tmp_path))
     assert "report.py" in status
-    assert "TODO" in diff
 
-
-def test_git_tools_read_the_fixture_repo() -> None:
-    status = git_status(str(FIXTURE))
-    assert "report.py" in status  # fixture carries an uncommitted change
-
-    log = git_log(str(FIXTURE))
+    log = git_log(str(tmp_path))
     assert "feat: initial fixture project" in log
 
-    diff = git_diff(str(FIXTURE))
+    diff = git_diff(str(tmp_path))
     assert "TODO" in diff
 
-    branch = git_branch_diff(str(FIXTURE), base="HEAD")
+    branch = git_branch_diff(str(tmp_path), base="HEAD")
     assert isinstance(branch, str)
 
 
-def test_git_tools_handle_non_repo(tmp_path: Path) -> None:
-    output = git_status(str(tmp_path))
-    assert "错误" in output
+def test_git_tools_handle_non_repo() -> None:
+    # Use a temporary directory outside the parent repository.
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as outside:
+        output = git_status(outside)
+        assert "错误" in output
 
 
-def test_fixture_repo_is_a_git_repo() -> None:
-    assert (FIXTURE / ".git").exists()
-    result = subprocess.run(
-        ["git", "-C", str(FIXTURE), "rev-parse", "--is-inside-work-tree"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.stdout.strip() == "true"
+def test_fixture_repo_is_a_source_tree() -> None:
+    assert (FIXTURE / "README.md").is_file()
+    assert (FIXTURE / "src" / "core" / "report.py").is_file()

@@ -14,6 +14,9 @@ from typing import Any, Literal
 
 # TUI -> agent
 MSG_INIT = "init"
+MSG_CHAT = "chat"
+MSG_COMMAND = "command"
+MSG_PERMISSION_RESPONSE = "permission_response"
 
 # agent -> TUI
 MSG_STATUS = "status"
@@ -24,6 +27,11 @@ MSG_RESET = "reset"
 MSG_REPORT = "report"
 MSG_ERROR = "error"
 MSG_DONE = "done"
+MSG_CHAT_DELTA = "chat_delta"
+MSG_CHAT_DONE = "chat_done"
+MSG_COMMAND_RESULT = "command_result"
+MSG_PERMISSION_REQUEST = "permission_request"
+MSG_SESSION = "session"
 
 TaskName = Literal["arch_overview", "arch_audit", "review_repo", "review_git"]
 
@@ -105,3 +113,37 @@ class Emitter:
 
     def done(self) -> None:
         self.send({"type": MSG_DONE})
+
+    def chat_delta(self, text: str) -> None:
+        if text:
+            self.send({"type": MSG_CHAT_DELTA, "text": text})
+
+    def chat_done(self, text: str = "") -> None:
+        self.send({"type": MSG_CHAT_DONE, "text": text})
+
+    def command_result(self, name: str, data: Any = None) -> None:
+        self.send({"type": MSG_COMMAND_RESULT, "name": name, "data": data or {}})
+
+    def permission_request(
+        self,
+        request_id: str,
+        path: str,
+        action: str,
+        summary: str,
+        session_id: str = "main",
+        trusted: bool = False,
+    ) -> None:
+        self.send(
+            {
+                "type": MSG_PERMISSION_REQUEST,
+                "request_id": request_id,
+                "path": path,
+                "action": action,
+                "summary": summary,
+                "session_id": session_id,
+                "trusted": trusted,
+            }
+        )
+
+    def session(self, data: dict[str, Any]) -> None:
+        self.send({"type": MSG_SESSION, "data": data})

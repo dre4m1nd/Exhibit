@@ -6,9 +6,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from agentscope.tool import FunctionTool
+
+from ..permissions import FileEditor
 
 IGNORED_DIRS = {
     ".git",
@@ -255,18 +257,74 @@ def _iter_files(root: Path) -> Any:
         stack.extend(children)
 
 
-def build_fs_tools() -> list[FunctionTool]:
+def build_fs_tools(
+    on_read: Callable[[str], None] | None = None,
+) -> list[FunctionTool]:
     """Build the filesystem tools as AgentScope function tools."""
+    def tracked_read(path: str, offset: int = 1, limit: int = 200) -> str:
+        """读取文本文件内容，并记录成功读取的路径。"""
+        result = read_file(path, offset=offset, limit=limit)
+        if on_read is not None and not result.startswith(("错误：", "跳过：")):
+            on_read(path)
+        return result
+
     return [
         FunctionTool(list_dir, is_read_only=True),
-        FunctionTool(read_file, is_read_only=True),
+        FunctionTool(tracked_read, is_read_only=True),
         FunctionTool(grep_files, is_read_only=True),
+    ]
+
+
+def build_edit_tools(
+    editor: FileEditor,
+    session_id: str | None = None,
+) -> list[FunctionTool]:
+    """Build preview-only edit tools; the caller applies approved changes.
+
+    Args:
+        editor: The workspace editor that stages previews.
+        session_id: Owning session for staged previews. Defaults to the
+            editor's active session, so a forked branch cannot inherit
+            another session's pending edits.
+    """
+    owner = session_id or editor.session_id
+
+    def write_file(path: str, content: str) -> str:
+        """为工作区文件生成写入预览。用户确认前不会修改磁盘。"""
+        preview = editor.preview_write(path, content)
+        editor.stage(preview, owner)
+        data = editor.pending_preview(preview)
+        return (
+            f"待确认：{data['action']} {path}（{preview.summary()}）。"
+            "请在界面中确认后再写入。"
+        )
+
+    def replace_in_file(path: str, old: str, new: str) -> str:
+        """为工作区文件生成局部替换预览。用户确认前不会修改磁盘。"""
+        preview = editor.preview_replace(path, old, new)
+        editor.stage(preview, owner)
+        return (
+            f"待确认：替换 {path}（{preview.summary()}）。"
+            "请在界面中确认后再写入。"
+        )
+
+    def create_directory(path: str) -> str:
+        """为工作区目录创建生成预览。用户确认前不会修改磁盘。"""
+        preview = editor.preview_directory(path)
+        editor.stage(preview, owner)
+        return f"待确认：新建目录 {path}。请在界面中确认后再创建。"
+
+    return [
+        FunctionTool(write_file, is_read_only=False),
+        FunctionTool(replace_in_file, is_read_only=False),
+        FunctionTool(create_directory, is_read_only=False),
     ]
 
 
 __all__ = [
     "IGNORED_DIRS",
     "Listing",
+    "build_edit_tools",
     "build_fs_tools",
     "grep_files",
     "list_dir",

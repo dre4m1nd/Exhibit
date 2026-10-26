@@ -22,6 +22,7 @@ def _run_git(args: list[str], repo_path: str) -> str:
     if sandbox is not None and requested != sandbox:
         try:
             requested.relative_to(sandbox)
+            repo = sandbox
         except ValueError:
             # The model may repeat a caller path relative to the process cwd.
             if (Path.cwd() / repo_path).resolve() == sandbox:

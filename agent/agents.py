@@ -9,8 +9,10 @@ from agentscope.model import OpenAIChatModel
 from agentscope.tool import Toolkit
 
 from .config import Config
-from .prompt_loader import get_system_prompt
-from .tools import build_fs_tools, build_git_tools
+from .permissions import FileEditor
+from .prompt_loader import get_chat_prompt, get_system_prompt
+from .tools import build_edit_tools, build_fs_tools, build_git_tools
+from .session import Session
 
 
 def build_agent(
@@ -33,11 +35,59 @@ def build_agent(
         credential=credential,
         model=model_name or config.model,
         stream=True,
+        parameters=OpenAIChatModel.Parameters(
+            max_tokens=config.max_output_tokens,
+        ),
     )
     toolkit = Toolkit(tools=[*build_fs_tools(), *build_git_tools()])
     return Agent(
         name="Exhibit",
         system_prompt=get_system_prompt(task),
+        model=model,
+        toolkit=toolkit,
+        react_config=ReActConfig(max_iters=config.max_iters),
+    )
+
+
+def build_chat_agent(
+    config: Config,
+    history: list[dict[str, str]],
+    *,
+    mode: str = "agent",
+    editor: FileEditor | None = None,
+    session: Session | None = None,
+) -> Agent:
+    """Create a chat agent whose context is supplied for this turn."""
+    credential = OpenAICredential(
+        api_key=config.api_key,
+        base_url=config.base_url,
+    )
+    model = OpenAIChatModel(
+        credential=credential,
+        model=config.model,
+        stream=True,
+        parameters=OpenAIChatModel.Parameters(
+            max_tokens=config.max_output_tokens,
+        ),
+    )
+    context = "\n\n".join(
+        f"{item['role']}: {item['content']}" for item in history[-20:]
+    )
+    on_read = session.record_read if session is not None else None
+    fs_tools = build_fs_tools(on_read=on_read)
+    toolkit = Toolkit(tools=[*fs_tools, *build_git_tools()])
+    if mode == "agent" and editor is not None:
+        toolkit = Toolkit(
+            tools=[
+                *fs_tools,
+                *build_git_tools(),
+                *build_edit_tools(editor),
+            ]
+        )
+    system_prompt = get_chat_prompt(mode=mode, context=context)
+    return Agent(
+        name="Exhibit",
+        system_prompt=system_prompt,
         model=model,
         toolkit=toolkit,
         react_config=ReActConfig(max_iters=config.max_iters),

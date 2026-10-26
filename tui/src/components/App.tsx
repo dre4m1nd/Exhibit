@@ -1,233 +1,455 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
-import type { ChildProcess } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import { startAgent, findRepoRoot } from "../bridge.js";
+import { startAgent, type AgentBridge } from "../bridge.js";
 import { Header } from "./Header.js";
-import { AgentLog, type LogEntry } from "./AgentLog.js";
-import { MainMenu, type TaskRequest } from "./MainMenu.js";
-import { ReportView } from "./ReportView.js";
+import { ChatView, type ChatMessage } from "./ChatView.js";
+import { PlanBanner } from "./PlanBanner.js";
+import { LoginDialog, type LoginRequest } from "./LoginDialog.js";
+import { PermissionPrompt, type PermissionScope } from "./PermissionPrompt.js";
+import {
+  moveSelection,
+  parseCommandArgs,
+  suggestionsFor,
+} from "../commands.js";
 import { theme } from "../theme.js";
-import { TASK_TITLES, type AgentMessage } from "../protocol.js";
+import type { AgentMessage } from "../protocol.js";
 
-type Phase = "menu" | "running" | "report";
+type Screen = "chat" | "login" | "login-busy" | "permission" | "confirm";
+/** Commands that ask the user to confirm before reaching the agent. */
+const CONFIRM_COMMANDS = new Set(["/logout", "/clear"]);
+const CONFIRM_HINT: Record<string, string> = {
+  "/logout": "删除当前供应商凭据？输入 y 确认，其它键取消",
+  "/clear": "清空当前对话上下文？输入 y 确认，其它键取消",
+};
 
-/** The top-level state machine: menu -> running -> report. */
-export function App({ model }: { model: string }) {
+interface PermissionRequest {
+  requestId: string;
+  path: string;
+  action: string;
+  summary: string;
+  sessionId: string;
+  trusted: boolean;
+}
+
+const PERMISSION_STATUS: Record<PermissionScope, string> = {
+  once: "已允许本次修改",
+  session: "已允许本会话后续写入",
+  reject: "已拒绝修改",
+};
+
+export function App({ model, repoPath }: { model: string; repoPath: string }) {
   const { exit } = useApp();
-  const [phase, setPhase] = useState<Phase>("menu");
-  const [request, setRequest] = useState<TaskRequest | null>(null);
-  const [entries, setEntries] = useState<LogEntry[]>([]);
-  const [report, setReport] = useState("");
-  const [status, setStatus] = useState({ phase: "scanning", detail: "" });
+  const [screen, setScreen] = useState<Screen>("chat");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [status, setStatus] = useState("就绪 · 输入 / 查看命令");
+  const [busy, setBusy] = useState(false);
+  const [planMode, setPlanMode] = useState(false);
+  const [loginError, setLoginError] = useState("");
+  const [permission, setPermission] = useState<PermissionRequest | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [selected, setSelected] = useState(-1);
   const [elapsed, setElapsed] = useState(0);
-  const [fatal, setFatal] = useState("");
-  const childRef = useRef<ChildProcess | null>(null);
+  const busyStart = useRef<number | null>(null);
+  const bridge = useRef<AgentBridge | null>(null);
+  const screenRef = useRef<Screen>("chat");
   const nextId = useRef(0);
-  const reportRef = useRef("");
-  const fatalRef = useRef("");
-  const runId = useRef(0);
+  const stream = useRef("");
 
-  useEffect(() => {
-    if (phase !== "running") return;
-    const startedAt = Date.now();
-    // Tick once per second: a 100ms tick repaints the whole Ink tree and
-    // floods the terminal with escape sequences.
-    const timer = setInterval(() => {
-      const seconds = Math.floor((Date.now() - startedAt) / 1000);
-      setElapsed((previous) => (previous === seconds ? previous : seconds));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [phase]);
-
-  useEffect(() => {
-    return () => {
-      childRef.current?.kill();
-    };
+  const append = useCallback((role: ChatMessage["role"], text: string) => {
+    setMessages((previous) => [
+      ...previous.slice(-199),
+      { id: nextId.current++, role, text },
+    ]);
   }, []);
 
-  const push = useCallback((kind: LogEntry["kind"], text: string) => {
-    setEntries((previous) => {
-      const entry = { id: nextId.current++, kind, text };
-      const next = [...previous, entry];
-      return next.length > 200 ? next.slice(next.length - 200) : next;
-    });
-  }, []);
-
-  const handleStart = useCallback(
-    (next: TaskRequest) => {
-      childRef.current?.kill();
-      childRef.current = null;
-      const currentRun = ++runId.current;
-      setRequest(next);
-      setEntries([]);
-      setReport("");
-      reportRef.current = "";
-      setFatal("");
-      fatalRef.current = "";
-      setElapsed(0);
-      setStatus({ phase: "scanning", detail: "启动智能体" });
-      setPhase("running");
-
-      childRef.current = startAgent({
-        task: next.task,
-        params: {
-          repoPath: next.repoPath,
-          branch: next.branch,
-          commitRange: next.commitRange,
-          model: model || undefined,
-        },
-        onMessage: (message: AgentMessage) => {
-          // Ignore stragglers from an aborted previous run.
-          if (currentRun !== runId.current) return;
-          handleMessage(message);
-        },
-        onError: (error: Error) => {
-          if (currentRun !== runId.current) return;
-          push("error", error.message);
-        },
-        onExit: (code) => {
-          childRef.current = null;
-          if (currentRun !== runId.current) return;
-          if (code !== 0 && !reportRef.current && !fatalRef.current) {
-            push("error", `智能体进程退出，代码 ${code ?? "unknown"}`);
+  const finishBusy = useCallback(
+    (nextStatus = "就绪") => {
+      const duration =
+        busyStart.current === null
+          ? 0
+          : (Date.now() - busyStart.current) / 1000;
+      // Keep the completed duration on the final assistant message so the
+      // history shows how long each review took, not just the latest run.
+      if (duration > 0) {
+        setMessages((previous) => {
+          for (let index = previous.length - 1; index >= 0; index -= 1) {
+            const item = previous[index];
+            if (item?.role === "assistant" && item.kind === undefined) {
+              const next = [...previous];
+              next[index] = { ...item, duration };
+              return next;
+            }
           }
-        },
-      });
+          return previous;
+        });
+      }
+      setElapsed(duration);
+      setBusy(false);
+      setStatus(nextStatus);
+      busyStart.current = null;
     },
-    [model, push],
+    [],
+  );
+
+  const appendTool = useCallback(
+    (kind: "tool" | "tool-result", text: string, ok = true) => {
+      setMessages((previous) => [
+        ...previous.slice(-199),
+        { id: nextId.current++, role: "system", text, kind, ok },
+      ]);
+    },
+    [],
+  );
+
+  // Track how long the agent has been working, updating once per second.
+  const updateElapsed = useCallback(() => {
+    if (busyStart.current !== null) {
+      setElapsed((Date.now() - busyStart.current) / 1000);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (busy) {
+      if (busyStart.current === null) busyStart.current = Date.now();
+      const timer = setInterval(updateElapsed, 1000);
+      return () => clearInterval(timer);
+    }
+    return undefined;
+  }, [busy, updateElapsed]);
+
+  useEffect(() => {
+    screenRef.current = screen;
+  }, [screen]);
+
+  useEffect(() => {
+    if (confirming) setScreen("confirm");
+    else if (screen === "confirm") setScreen("chat");
+  }, [confirming, screen]);
+
+  const handleCommandResult = useCallback(
+    (name: string, data: Record<string, unknown>) => {
+      if (name === "/login") {
+        setScreen("chat");
+        setLoginError("");
+        append("system", `已登录 ${String(data.provider ?? "")} · ${String(data.model ?? "")}`);
+        setStatus("登录成功");
+        return;
+      }
+      if (name === "/plan") {
+        const active = data.mode === "plan";
+        setPlanMode(active);
+        setStatus(active ? "PLAN · 只读分析模式" : "已退出计划模式");
+        return;
+      }
+      if (name === "/fork") {
+        append("system", `已创建会话 ${String(data.display_name ?? data.session ?? "")}`);
+        return;
+      }
+      if (name === "/status") {
+        append("system", formatStatus(data));
+        return;
+      }
+      if (name === "/quit" && data.can_quit === true) {
+        exit();
+        return;
+      }
+      if (name === "/provider" && Array.isArray(data.providers)) {
+        append(
+          "system",
+          (data.providers as Array<Record<string, unknown>>)
+            .map((item) => `${String(item.label)} · ${item.logged_in ? "已登录" : "未登录"}`)
+            .join("\n"),
+        );
+        return;
+      }
+      if (name === "/init" || name === "/review" || name === "/diff") {
+        append("system", `已完成 ${name}`);
+        return;
+      }
+      append("system", `${name}: ${JSON.stringify(data)}`);
+    },
+    [append, exit],
   );
 
   const handleMessage = useCallback(
     (message: AgentMessage) => {
       switch (message.type) {
-        case "status":
-          setStatus({ phase: message.phase, detail: message.detail });
-          // "tool" is already rendered as its own ▸ line; don't duplicate it.
-          if (message.phase !== "thinking" && message.phase !== "tool") {
-            push("status", `${message.phase} ${message.detail}`.trim());
-          }
+        case "chat_delta":
+          stream.current += message.text;
+          setMessages((previous) => {
+            const last = previous[previous.length - 1];
+            if (last?.role === "assistant") {
+              return [...previous.slice(0, -1), { ...last, text: stream.current }];
+            }
+            return [
+              ...previous,
+              { id: nextId.current++, role: "assistant", text: stream.current },
+            ];
+          });
           break;
-        case "tool_call":
-          push("tool", `${message.name}(${formatArgs(message.args)})`);
+        case "chat_done":
+          if (message.text && !stream.current) append("assistant", message.text);
+          stream.current = "";
+          finishBusy();
           break;
-        case "tool_result":
-          push("result", `${message.name} → ${message.summary}`);
+        case "command_result":
+          handleCommandResult(message.name, message.data);
+          finishBusy();
           break;
-        case "token":
-          // Draft text is intentionally not rendered: the final report is the
-          // only thing worth showing, and repainting per token is wasteful.
-          break;
-        case "reset":
+        case "permission_request":
+          setPermission({
+            requestId: message.request_id,
+            path: message.path,
+            action: message.action,
+            summary: message.summary,
+            sessionId: message.session_id,
+            trusted: message.trusted,
+          });
+          setScreen("permission");
           break;
         case "report":
-          reportRef.current = message.markdown;
-          setReport(message.markdown);
-          setPhase("report");
+          append("assistant", message.markdown);
+          finishBusy();
           break;
         case "error":
-          fatalRef.current = message.message;
-          setFatal(message.message);
-          push("error", message.message);
-          setPhase("report");
+          append("system", message.message);
+          finishBusy("出错");
+          if (screenRef.current === "login-busy") {
+            setLoginError(message.message);
+            setScreen("login");
+            return;
+          }
           break;
-        case "done":
-          setPhase((current) => {
-            if (current !== "running") return current;
-            return "report";
-          });
+        case "status":
+          setStatus(message.detail || message.phase);
+          break;
+        case "session":
+          setStatus(`会话 ${String(message.data.session ?? "main")}`);
+          break;
+        case "tool_call":
+          setStatus(`${message.name}(${formatArgs(message.args)})`);
+          appendTool("tool", `${message.name}(${formatArgs(message.args)})`);
+          break;
+        case "tool_result":
+          setStatus(`${message.name} → ${message.summary}`);
+          appendTool("tool-result", `${message.name} → ${message.summary}`, message.ok);
+          break;
+        default:
           break;
       }
     },
-    [push],
+    [append, appendTool, finishBusy, handleCommandResult],
   );
 
-  const handleSave = useCallback(() => {
-    const target = path.join(findRepoRoot(), "EXHIBIT_REPORT.md");
-    fs.writeFileSync(target, report, "utf8");
-    push("status", `已保存到 ${target}`);
-  }, [push, report]);
+  useEffect(() => {
+    bridge.current = startAgent({
+      repoPath,
+      onMessage: handleMessage,
+      onError: (error) => {
+        append("system", error.message);
+        setBusy(false);
+      },
+      onExit: (code) => {
+        if (code !== null && code !== 0) {
+          append("system", `智能体进程退出，代码 ${code}`);
+        }
+      },
+    });
+    return () => bridge.current?.stop();
+  }, [append, handleMessage, repoPath]);
 
-  useInput((input, key) => {
-    if (phase === "running" && (input === "q" || key.escape)) {
-      runId.current += 1;
-      childRef.current?.kill();
-      childRef.current = null;
-      setPhase("menu");
+  const submit = useCallback(
+    (value: string) => {
+      const text = value.trim();
+      if (!text || busy) return;
+      setInput("");
+      setSelected(-1);
+      if (text === "/quit") {
+        setBusy(true);
+        bridge.current?.sendCommand("/quit");
+        return;
+      }
+      if (text === "/login") {
+        setLoginError("");
+        setScreen("login");
+        return;
+      }
+      if (text.startsWith("/") && CONFIRM_COMMANDS.has((text.split(/\s+/)[0] ?? "").toLowerCase())) {
+        setConfirming((text.split(/\s+/)[0] ?? "").toLowerCase());
+        return;
+      }
+      if (text.startsWith("/")) {
+        const [name, ...rest] = text.split(/\s+/);
+        setBusy(true);
+        bridge.current?.sendCommand(name ?? "", parseCommandArgs(name ?? "", rest));
+        return;
+      }
+      append("user", text);
+      stream.current = "";
+      setBusy(true);
+      setStatus("模型推理中");
+      bridge.current?.sendChat(text);
+    },
+    [append, busy],
+  );
+
+  useInput(
+    (value, key) => {
+      const candidates = suggestionsFor(input, planMode);
+      if (candidates.length > 0) {
+        if (key.upArrow) {
+          setSelected((current) => moveSelection(current, -1, candidates.length));
+          return;
+        }
+        if (key.downArrow) {
+          setSelected((current) => moveSelection(current, 1, candidates.length));
+          return;
+        }
+        const active = candidates[selected] ?? candidates[0];
+        if (key.tab && active) {
+          const next = active.insert + (active.takesArguments ? " " : "");
+          setInput(next);
+          setSelected(suggestionsFor(next, planMode).length > 0 ? 0 : -1);
+          return;
+        }
+        if (key.return && active) {
+          if (active.execute) {
+            setInput("");
+            setSelected(-1);
+            submit(active.execute);
+            return;
+          }
+          // Commands that take arguments are only filled in, so Enter cannot
+          // accidentally kick off a full-repo review.
+          const next = active.insert + (active.takesArguments ? " " : "");
+          setInput(next);
+          setSelected(suggestionsFor(next, planMode).length > 0 ? 0 : -1);
+          return;
+        }
+      }
+      if (key.return) {
+        submit(input);
+        return;
+      }
+      if (key.backspace || key.delete) {
+        const next = input.slice(0, -1);
+        setInput(next);
+        setSelected(suggestionsFor(next, planMode).length > 0 ? 0 : -1);
+        return;
+      }
+      if (key.ctrl && value === "c") {
+        setBusy(true);
+        bridge.current?.sendCommand("/quit");
+        return;
+      }
+      if (value && !key.ctrl && !key.meta) {
+        const next = input + value;
+        setInput(next);
+        setSelected(suggestionsFor(next, planMode).length > 0 ? 0 : -1);
+      }
+    },
+    { isActive: screen === "chat" },
+  );
+
+  const finishLogin = (request: LoginRequest) => {
+    setLoginError("");
+    setScreen("login-busy");
+    setStatus("校验并保存凭据");
+    bridge.current?.sendCommand("/login", {
+      provider: request.provider,
+      api_key: request.apiKey,
+      model: request.model,
+      base_url: request.baseUrl,
+    });
+  };
+
+  const decidePermission = (scope: PermissionScope) => {
+    if (permission) {
+      bridge.current?.sendPermission(
+        permission.requestId,
+        scope !== "reject",
+        scope === "session" ? "session" : "once",
+      );
     }
-  });
+    setPermission(null);
+    setScreen("chat");
+    setStatus(PERMISSION_STATUS[scope]);
+  };
 
-  if (phase === "menu" || !request) {
-    return (
-      <MainMenu
-        defaultRepoPath={process.cwd()}
-        onStart={handleStart}
-      />
-    );
-  }
+  const runConfirmedCommand = useCallback(
+    (name: string) => {
+      setConfirming(null);
+      setBusy(true);
+      bridge.current?.sendCommand(name, { confirm: true });
+    },
+    [],
+  );
+
+  useInput(
+    (value, key) => {
+      if (confirming === null) return;
+      if (key.escape || (key.ctrl && value === "c")) {
+        setConfirming(null);
+        return;
+      }
+      if (value.toLowerCase() === "y") runConfirmedCommand(confirming);
+      else setConfirming(null);
+    },
+    { isActive: screen === "confirm" },
+  );
 
   return (
     <Box flexDirection="column">
-      <Header
-        taskTitle={TASK_TITLES[request.task]}
-        repoPath={request.repoPath}
-        model={model || "默认"}
-      />
+      <Header taskTitle="Exhibit Chat" repoPath={repoPath} model={model} />
       <Box height={1} />
-      <StatusLine status={status} running={phase === "running"} elapsed={elapsed} />
-      <Box height={1} />
-      {phase === "report" ? (
-        fatal ? (
-          <Box flexDirection="column" borderStyle="round" borderColor={theme.danger} paddingX={1}>
-            <Text color={theme.danger} bold>
-              任务失败
-            </Text>
-            <Text color={theme.text}>{fatal}</Text>
-            <Text color={theme.muted}>按 q 返回菜单</Text>
-          </Box>
-        ) : (
-          <ReportView
-            markdown={report}
-            onSave={handleSave}
-            onQuit={() => setPhase("menu")}
-          />
-        )
+      <PlanBanner active={planMode} />
+      {screen === "login" || screen === "login-busy" ? (
+        <LoginDialog
+          onCancel={() => setScreen("chat")}
+          onSubmit={finishLogin}
+          busy={screen === "login-busy"}
+          error={loginError}
+        />
+      ) : screen === "permission" && permission ? (
+        <PermissionPrompt
+          path={permission.path}
+          action={permission.action}
+          summary={permission.summary}
+          trusted={permission.trusted}
+          onDecision={decidePermission}
+        />
+      ) : screen === "confirm" && confirming ? (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.warn} paddingX={1}>
+          <Text color={theme.warn} bold>
+            需要确认 {confirming}
+          </Text>
+          <Text color={theme.text}>{CONFIRM_HINT[confirming] ?? "确认执行？"}</Text>
+        </Box>
       ) : (
-        <AgentLog entries={entries} />
+        <ChatView
+          messages={messages}
+          input={input}
+          status={status}
+          planMode={planMode}
+          busy={busy}
+          selected={selected}
+          elapsed={elapsed}
+        />
       )}
+      {screen !== "chat" ? <Text color={theme.muted}>Esc 返回 · Ctrl+C 退出</Text> : null}
     </Box>
   );
 }
 
-function StatusLine({
-  status,
-  running,
-  elapsed,
-}: {
-  status: { phase: string; detail: string };
-  running: boolean;
-  elapsed: number;
-}) {
-  const seconds = String(elapsed);
-  const glyph = running ? "◐" : "✓";
-  return (
-    <Box borderStyle="round" borderColor={running ? theme.accent : theme.border} paddingX={1}>
-      <Text color={running ? theme.accent : theme.muted}>{glyph}</Text>
-      <Text color={theme.muted}> {status.phase} </Text>
-      <Text color={theme.text}>{status.detail}</Text>
-      <Box flexGrow={1} />
-      <Text color={theme.muted}>
-        {seconds}s{running ? "  q 中断" : ""}
-      </Text>
-    </Box>
-  );
+function formatStatus(data: Record<string, unknown>): string {
+  return Object.entries(data)
+    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`)
+    .join("\n");
 }
 
 function formatArgs(args: Record<string, unknown>): string {
-  const parts = Object.entries(args).map(([key, value]) => {
-    const rendered = typeof value === "string" ? value : JSON.stringify(value);
-    return `${key}=${rendered}`;
-  });
-  return parts.join(", ");
+  return Object.entries(args)
+    .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
+    .join(", ");
 }

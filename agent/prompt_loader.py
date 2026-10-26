@@ -85,3 +85,15 @@ def get_user_prompt(task: str, params: dict[str, str]) -> str:
         _read_prompt("user_prompt.md"),
         {"repo_path": repo, "scope_line": scope_line},
     )
+
+
+def get_chat_prompt(*, mode: str = "agent", context: str = "") -> str:
+    """Load the chat prompt for the active mode and append session context."""
+    filename = "plan.md" if mode == "plan" else "chat.md"
+    base = _read_prompt(filename)
+    edit_rules = _read_prompt("file_edit.md") if mode == "agent" else ""
+    rendered = _render(
+        f"{base}\n\n{edit_rules}",
+        {"context": context or "（暂无历史）"},
+    )
+    return rendered.strip()

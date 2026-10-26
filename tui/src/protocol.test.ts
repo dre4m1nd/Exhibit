@@ -32,6 +32,38 @@ describe("parseLine", () => {
       message: "boom",
     });
     expect(parseLine('{"type":"done"}')).toEqual({ type: "done" });
+    expect(parseLine('{"type":"chat_delta","text":"hi"}')).toEqual({
+      type: "chat_delta",
+      text: "hi",
+    });
+    expect(parseLine('{"type":"chat_done","text":"done"}')).toEqual({
+      type: "chat_done",
+      text: "done",
+    });
+    expect(
+      parseLine('{"type":"command_result","name":"/status","data":{"mode":"plan"}}'),
+    ).toEqual({
+      type: "command_result",
+      name: "/status",
+      data: { mode: "plan" },
+    });
+    expect(
+      parseLine(
+        '{"type":"permission_request","request_id":"p1","path":"a.py","action":"覆盖","summary":"1 → 2 行"}',
+      ),
+    ).toEqual({
+      type: "permission_request",
+      request_id: "p1",
+      path: "a.py",
+      action: "覆盖",
+      summary: "1 → 2 行",
+      session_id: "main",
+      trusted: false,
+    });
+    expect(parseLine('{"type":"session","data":{"session":"main"}}')).toEqual({
+      type: "session",
+      data: { session: "main" },
+    });
   });
 
   it("drops malformed, unknown and non-object lines", () => {
@@ -47,5 +79,21 @@ describe("parseLine", () => {
     for (const task of TASKS) {
       expect(TASK_TITLES[task]).toBeTruthy();
     }
+  });
+
+  it("carries the session id and session-trust flag on permission requests", () => {
+    expect(
+      parseLine(
+        '{"type":"permission_request","request_id":"p2","path":"b.py","action":"替换","summary":"1 → 2 行","session_id":"fork-01","trusted":true}',
+      ),
+    ).toEqual({
+      type: "permission_request",
+      request_id: "p2",
+      path: "b.py",
+      action: "替换",
+      summary: "1 → 2 行",
+      session_id: "fork-01",
+      trusted: true,
+    });
   });
 });

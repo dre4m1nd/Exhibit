@@ -7,9 +7,13 @@
   "bin": {
     "exhibit": "dist/main.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "tsx src/main.tsx",
     "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
     "start": "node dist/main.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"

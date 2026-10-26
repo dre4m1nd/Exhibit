@@ -15,7 +15,11 @@ tui/dist/
 # Local
 .env
 EXHIBIT_REPORT.md
+.codex-write-probe.txt
 
 # Internal planning documents
 任务规划书.md
 任务执行计划书.md
+已完成任务汇总.md
+任务书-命令补全.md
+任务书-补全与历史渲染.md
