@@ -23,8 +23,10 @@ def credential_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_provider_catalog_contains_required_providers() -> None:
-    assert set(PROVIDERS) == {"openai", "deepseek", "qwen", "custom"}
+    assert set(PROVIDERS) == {"openai", "deepseek", "qwen", "openrouter", "custom"}
     assert get_provider("qwen").base_url.startswith("https://dashscope.")
+    assert get_provider("openrouter").base_url == "https://openrouter.ai/api/v1"
+    assert get_provider("openrouter").models == ("openrouter/free",)
     assert get_provider("custom").base_url == ""
 
 
@@ -45,6 +47,29 @@ def test_unknown_provider_lists_choices() -> None:
 def test_unsafe_endpoints_are_rejected(endpoint: str) -> None:
     with pytest.raises(ValueError):
         validate_base_url(endpoint)
+
+
+def test_custom_provider_accepts_loopback_endpoints() -> None:
+    assert (
+        validate_base_url("http://127.0.0.1:3425/v1", provider="custom")
+        == "http://127.0.0.1:3425/v1"
+    )
+    assert (
+        validate_base_url("https://[::1]:3425/v1/", provider="custom")
+        == "https://[::1]:3425/v1"
+    )
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://127.0.0.1:3425/v1",
+        "https://127.0.0.1:3425/v1",
+    ],
+)
+def test_builtin_provider_rejects_loopback_endpoints(endpoint: str) -> None:
+    with pytest.raises(ValueError):
+        validate_base_url(endpoint, provider="openai")
 
 
 def test_save_and_mask_credential(credential_dir) -> None:

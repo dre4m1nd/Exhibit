@@ -86,7 +86,49 @@ def test_login_switches_provider_and_model() -> None:
     assert credential.model == "deepseek-chat"
     assert store.active.provider == "deepseek"
     assert switch_model(store.active, "deepseek-reasoner") == "deepseek-reasoner"
-    assert switch_provider(store.active, "deepseek").model == "deepseek-chat"
+    assert switch_provider(store.active, "deepseek").model == "deepseek-reasoner"
+
+
+def test_openrouter_login_uses_free_router() -> None:
+    store = SessionStore(".")
+    credential = login(store.active, "openrouter", "sk-or-test-abcdefghij")
+
+    assert credential.base_url == "https://openrouter.ai/api/v1"
+    assert credential.model == "openrouter/free"
+    assert store.active.provider == "openrouter"
+
+
+def test_custom_loopback_login_uses_supplied_model() -> None:
+    store = SessionStore(".")
+    credential = login(
+        store.active,
+        "custom",
+        "magpie",
+        model="group/master",
+        base_url="http://127.0.0.1:3425/v1",
+    )
+
+    assert credential.base_url == "http://127.0.0.1:3425/v1"
+    assert credential.model == "group/master"
+    assert store.active.provider == "custom"
+
+
+def test_switch_model_loads_the_only_saved_provider() -> None:
+    login(SessionStore(".").active, "deepseek", "sk-test-abcdefghij")
+    fresh = SessionStore(".").active
+
+    assert switch_model(fresh, "deepseek-reasoner") == "deepseek-reasoner"
+    assert fresh.provider == "deepseek"
+    assert fresh.model == "deepseek-reasoner"
+
+
+def test_switch_model_requires_a_choice_with_multiple_providers() -> None:
+    login(SessionStore(".").active, "deepseek", "sk-test-abcdefghij")
+    login(SessionStore(".").active, "qwen", "sk-test-abcdefghij")
+    fresh = SessionStore(".").active
+
+    with pytest.raises(ValueError, match="multiple providers"):
+        switch_model(fresh, "deepseek-reasoner")
 
 
 def test_provider_catalog_reports_login_state() -> None:
@@ -96,6 +138,9 @@ def test_provider_catalog_reports_login_state() -> None:
     qwen = next(item for item in catalog if item["key"] == "qwen")
     assert qwen["logged_in"] is True
     assert qwen["models"] == ["qwen-plus", "qwen-coder-plus"]
+    openrouter = next(item for item in catalog if item["key"] == "openrouter")
+    assert openrouter["logged_in"] is False
+    assert openrouter["models"] == ["openrouter/free"]
 
 
 def test_switching_to_unauthenticated_provider_is_rejected() -> None:

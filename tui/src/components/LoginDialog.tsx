@@ -9,11 +9,12 @@ export interface LoginRequest {
   baseUrl: string;
 }
 
-const PROVIDERS = [
-  { key: "openai", label: "OpenAI", model: "gpt-5.4-mini" },
-  { key: "deepseek", label: "DeepSeek", model: "deepseek-chat" },
-  { key: "qwen", label: "Qwen", model: "qwen-plus" },
-  { key: "custom", label: "自定义 OpenAI 兼容端点", model: "" },
+export const LOGIN_PROVIDERS = [
+  { key: "openai", label: "OpenAI" },
+  { key: "deepseek", label: "DeepSeek" },
+  { key: "qwen", label: "Qwen" },
+  { key: "openrouter", label: "OpenRouter" },
+  { key: "custom", label: "自定义 OpenAI 兼容端点" },
 ];
 
 type Field = "provider" | "key" | "baseUrl" | "model";
@@ -35,7 +36,7 @@ export function LoginDialog({
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [field, setField] = useState<Field>("provider");
-  const provider = PROVIDERS[providerIndex]!;
+  const provider = LOGIN_PROVIDERS[providerIndex]!;
   const isCustom = provider.key === "custom";
 
   const fieldValue = (target: Field): string =>
@@ -68,7 +69,9 @@ export function LoginDialog({
     if (field === "provider") {
       if (key.upArrow) setProviderIndex((index) => Math.max(0, index - 1));
       else if (key.downArrow) {
-        setProviderIndex((index) => Math.min(PROVIDERS.length - 1, index + 1));
+        setProviderIndex((index) =>
+          Math.min(LOGIN_PROVIDERS.length - 1, index + 1),
+        );
       } else if (key.return) setField("key");
       return;
     }
@@ -85,7 +88,7 @@ export function LoginDialog({
       onSubmit({
         provider: provider.key,
         apiKey,
-        model: model.trim() || provider.model,
+        model: isCustom ? model.trim() : "",
         baseUrl,
       });
       return;
@@ -104,13 +107,13 @@ export function LoginDialog({
       </Text>
       <Text color={theme.muted}>选择供应商，然后输入 API Key（不会显示明文）</Text>
       <Box height={1} />
-      {PROVIDERS.map((item, index) => (
+      {LOGIN_PROVIDERS.map((item, index) => (
         <Text
           key={item.key}
           color={field === "provider" && index === providerIndex ? theme.accent : theme.muted}
         >
           {field === "provider" && index === providerIndex ? "❯" : " "} {item.label} ·{" "}
-          {item.model}
+          {item.key === "custom" ? "需填写端点与模型" : "使用供应商默认模型"}
         </Text>
       ))}
       <Box height={1} />

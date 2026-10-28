@@ -46,8 +46,16 @@ exhibit --repo-path D:\path\to\another-project
 
 ## 登录与配置
 
-启动 TUI 后输入 `/login`，可选择 OpenAI、DeepSeek 或 Qwen。Key 以掩码输入，
+启动 TUI 后输入 `/login`，可选择 OpenAI、DeepSeek、Qwen 或 OpenRouter。Key 以掩码输入，
 经最小请求校验后保存到本地用户配置目录，不写入仓库。
+
+选择「自定义 OpenAI 兼容端点」时，可连接 `127.0.0.1` 或 `::1` 上的本机服务，
+例如 `http://127.0.0.1:3425/v1`。该例外只适用于自定义端点；内置供应商仍只接受
+HTTPS 远程地址，其他 localhost 与私网地址也继续拒绝。
+
+OpenRouter 默认使用 `openrouter/free` 免费路由，端点固定为
+`https://openrouter.ai/api/v1`。若免费模型暂时限流或不可用，界面会显示明确错误，
+不会留下空白回答。
 
 ```text
 /login       配置模型供应商与 API Key
@@ -61,10 +69,13 @@ exhibit --repo-path D:\path\to\another-project
 环境变量适用于 CI、无头运行或显式覆盖：
 
 - `EXHIBIT_BASE_URL`：远程 OpenAI 兼容 API，默认 `https://api.openai.com/v1`；
-  必须是 HTTPS，且不能是本机或私网地址
+  内置供应商必须使用 HTTPS，且不能是本机或私网地址；显式选择 `EXHIBIT_PROVIDER=custom`
+  时允许 `127.0.0.1` 或 `::1` 的 loopback 端点
 - `EXHIBIT_API_KEY`：环境变量优先；未设置时无头模式会回退到 `/login` 保存的凭据
+- `OPENROUTER_API_KEY`：仅使用 OpenRouter 无头模式时可替代 `EXHIBIT_API_KEY`；
+  自动选择 OpenRouter 端点与 `openrouter/free`
 - `EXHIBIT_MODEL`：默认 `gpt-5.4-mini`
-- `EXHIBIT_PROVIDER`：保存了多个供应商时，指定无头模式使用哪一个
+- `EXHIBIT_PROVIDER`：保存了多个供应商时，指定使用哪一个（无头与聊天模式均生效）
 - `EXHIBIT_MAX_ITERS`：ReAct 循环上限，默认 60
 - `EXHIBIT_MAX_OUTPUT_TOKENS`：单次审查/报告的最大输出 token，默认 16000；报告被截断时调大
 - `EXHIBIT_PROMPT_DIR`：自定义提示词目录，默认 `agent/prompts/`

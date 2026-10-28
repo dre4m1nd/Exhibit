@@ -9,9 +9,13 @@ from ipaddress import ip_address
 from urllib.parse import urlparse
 
 from .credentials import SavedCredential, load_credentials
+from .providers import validate_base_url
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-5.4-mini"
+OPENROUTER_API_KEY = "OPENROUTER_API_KEY"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_MODEL = "openrouter/free"
 
 
 @dataclass(frozen=True)
@@ -28,23 +32,37 @@ class Config:
 
 def load_config() -> Config:
     """Build the config from the environment or the TUI's saved login."""
-    api_key = os.getenv("EXHIBIT_API_KEY", "").strip()
+    exhibit_key = os.getenv("EXHIBIT_API_KEY", "").strip()
+    openrouter_key = os.getenv(OPENROUTER_API_KEY, "").strip()
+    api_key = exhibit_key or openrouter_key
     saved = None if api_key else _saved_credential()
     if not api_key and saved is None:
         raise ValueError(
-            "EXHIBIT_API_KEY is required: no saved credential found "
-            "(use /login in the TUI or set EXHIBIT_API_KEY)"
+            "EXHIBIT_API_KEY or OPENROUTER_API_KEY is required: "
+            "no saved credential found (use /login in the TUI or set one)"
         )
 
     base_url = os.getenv("EXHIBIT_BASE_URL", "").rstrip("/")
     if not base_url:
-        base_url = saved.base_url if saved is not None else DEFAULT_BASE_URL
-    _validate_remote_url(base_url)
+        if openrouter_key and not exhibit_key:
+            base_url = OPENROUTER_BASE_URL
+        else:
+            base_url = saved.base_url if saved is not None else DEFAULT_BASE_URL
+    selected_provider = (
+        saved.provider
+        if saved is not None
+        else os.getenv("EXHIBIT_PROVIDER", "").strip().lower() or None
+    )
+    _validate_remote_url(base_url, provider=selected_provider)
     return Config(
         base_url=base_url,
         api_key=api_key or (saved.api_key if saved is not None else ""),
         model=os.getenv("EXHIBIT_MODEL")
-        or (saved.model if saved is not None else DEFAULT_MODEL),
+        or (
+            OPENROUTER_MODEL
+            if openrouter_key and not exhibit_key
+            else saved.model if saved is not None else DEFAULT_MODEL
+        ),
         max_iters=int(os.getenv("EXHIBIT_MAX_ITERS", "60")),
         request_timeout=float(os.getenv("EXHIBIT_TIMEOUT", "600")),
         max_output_tokens=int(os.getenv("EXHIBIT_MAX_OUTPUT_TOKENS", "16000")),
@@ -83,24 +101,9 @@ def _saved_credential() -> SavedCredential | None:
     )
 
 
-def _validate_remote_url(base_url: str) -> None:
-    """Reject local, private, and non-HTTPS model endpoints."""
-    parsed = urlparse(base_url)
-    if parsed.scheme != "https":
-        raise ValueError("EXHIBIT_BASE_URL must use https")
-    host = parsed.hostname
-    if not host:
-        raise ValueError("EXHIBIT_BASE_URL must include a host")
-    normalized_host = host.rstrip(".").lower()
-    if normalized_host == "localhost" or normalized_host.endswith(
-        (".localhost", ".localdomain")
-    ):
-        raise ValueError("EXHIBIT_BASE_URL must not point to localhost")
+def _validate_remote_url(base_url: str, *, provider: str | None = None) -> None:
+    """Validate an endpoint while keeping loopback limited to custom providers."""
     try:
-        address = ip_address(normalized_host)
-    except ValueError:
-        return
-    if not address.is_global:
-        raise ValueError(
-            "EXHIBIT_BASE_URL must not point to a local or private address"
-        )
+        validate_base_url(base_url, provider=provider)
+    except ValueError as exc:
+        raise ValueError(f"EXHIBIT_BASE_URL: {exc}") from exc

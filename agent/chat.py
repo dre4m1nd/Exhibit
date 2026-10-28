@@ -7,13 +7,16 @@ from typing import Any
 from pathlib import Path
 
 from .credentials import load_credentials, remove_credential
+from .models import discover_model_catalog
 from .permissions import FileEditor
 from .session import (
     SessionStore,
     command_catalog,
+    ensure_provider,
     login,
     provider_catalog,
     switch_model,
+    switch_model_provider,
     switch_provider,
     toggle_plan,
 )
@@ -42,11 +45,9 @@ def handle_command(
         )
         return {"provider": credential.provider, "model": credential.model}
     if normalized == "/logout":
-        if not session.provider:
-            raise ValueError("no provider is logged in")
         if not bool(args.get("confirm")):
             raise ValueError("logout requires confirm=true")
-        target = str(args.get("provider") or session.provider)
+        target = str(args.get("provider") or ensure_provider(session))
         removed = remove_credential(target)
         # Only the active session's credential is cleared, so removing another
         # provider must not silently log this session out.
@@ -60,10 +61,33 @@ def handle_command(
             return {"provider": credential.provider, "model": credential.model}
         return {"providers": provider_catalog()}
     if normalized == "/model":
+        requested_provider = str(args.get("provider", "")).strip()
         requested = str(args.get("model", "")).strip()
+        if requested_provider:
+            if not requested:
+                raise ValueError("model is required when switching provider")
+            provider, model = switch_model_provider(
+                session,
+                requested_provider,
+                requested,
+            )
+            return {"kind": "model_selected", "provider": provider, "model": model}
         if requested:
-            return {"model": switch_model(session, requested)}
-        return {"model": session.model, "provider": session.provider}
+            selected = switch_model(session, requested)
+            return {
+                "kind": "model_selected",
+                "provider": session.provider,
+                "model": selected,
+            }
+        if session.provider is None:
+            saved = load_credentials()
+            if not saved:
+                return {
+                    "kind": "model_catalog",
+                    "current": {"provider": "", "model": ""},
+                    "providers": [],
+                }
+        return discover_model_catalog(session.provider, session.model)
     if normalized == "/status":
         return store.status()
     if normalized == "/plan":

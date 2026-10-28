@@ -170,7 +170,7 @@ def login(
     endpoint_input = base_url.strip() or known.base_url
     if not endpoint_input:
         raise ValueError("base URL is required for a custom endpoint")
-    endpoint = validate_base_url(endpoint_input)
+    endpoint = validate_base_url(endpoint_input, provider=known.key)
     selected_model = model.strip() or (known.models[0] if known.models else "")
     if not selected_model:
         raise ValueError("model is required for a custom endpoint")
@@ -228,12 +228,69 @@ def switch_provider(session: Session, provider: str) -> SavedCredential:
     return saved
 
 
+def ensure_provider(session: Session) -> str:
+    """Load the sole saved provider when a fresh session has none selected."""
+    if session.provider:
+        return session.provider
+    saved = load_credentials()
+    if not saved:
+        raise ValueError("no provider is logged in; use /login")
+    if len(saved) > 1:
+        raise ValueError("multiple providers are logged in; choose one with /provider")
+    provider, credential = next(iter(saved.items()))
+    session.configure(credential)
+    return provider
+
+
 def switch_model(session: Session, model: str) -> str:
+    """Select and persist a model while keeping the active credential."""
     selected = model.strip()
     if not selected:
         raise ValueError("model is required")
+    provider = ensure_provider(session)
+    saved = load_credentials().get(provider)
+    if saved is None:
+        raise ValueError(f"provider '{provider}' is not logged in; use /login")
+    save_credential(
+        provider,
+        saved.api_key,
+        model=selected,
+        base_url=saved.base_url,
+    )
     session.model = selected
     return selected
+
+
+def switch_model_provider(
+    session: Session,
+    provider: str,
+    model: str,
+) -> tuple[str, str]:
+    """Switch provider and model together, then persist the selection."""
+    key = provider.strip().lower()
+    selected = model.strip()
+    if not key:
+        raise ValueError("provider is required")
+    if not selected:
+        raise ValueError("model is required")
+    saved = load_credentials().get(key)
+    if saved is None:
+        raise ValueError(f"provider '{key}' is not logged in; use /login")
+    save_credential(
+        key,
+        saved.api_key,
+        model=selected,
+        base_url=saved.base_url,
+    )
+    session.configure(
+        SavedCredential(
+            provider=key,
+            base_url=saved.base_url,
+            model=selected,
+            api_key=saved.api_key,
+        )
+    )
+    return key, selected
 
 
 def provider_catalog() -> list[dict[str, object]]:
@@ -254,9 +311,11 @@ __all__ = [
     "Session",
     "SessionStore",
     "command_catalog",
+    "ensure_provider",
     "login",
     "provider_catalog",
     "switch_model",
+    "switch_model_provider",
     "switch_provider",
     "toggle_plan",
     "validate_api_key",

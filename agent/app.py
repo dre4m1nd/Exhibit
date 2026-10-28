@@ -42,6 +42,7 @@ from .protocol import (
     decode,
 )
 from .session import SessionStore
+from .tools.git import GitReviewScope, inspect_git_review_scope
 
 
 def _parse_args(fragment: str) -> dict:
@@ -140,9 +141,8 @@ async def _stream_agent(
             emitter.status("thinking", "模型推理中")
 
         elif event_type == EventType.THINKING_BLOCK_DELTA:
-            # Reasoning is intentionally not streamed into the report pane;
-            # the status line already tells the user the model is thinking.
-            pass
+            if isinstance(event, ThinkingBlockDeltaEvent) and event.delta:
+                emitter.think_delta(event.delta)
 
         elif event_type == EventType.TEXT_BLOCK_DELTA:
             if isinstance(event, TextBlockDeltaEvent) and event.delta:
@@ -156,7 +156,9 @@ async def _stream_agent(
             EventType.TOOL_RESULT_END,
         }:
             _forward_tool_event(event, emitter, calls, results)
-            emitter.reset()
+            if event_type == EventType.TOOL_CALL_START:
+                # Discard the draft only once the model stops talking and acts.
+                emitter.reset()
 
         elif event_type == EventType.REPLY_END:
             pass
@@ -287,7 +289,7 @@ def _chat_loop(repo_path: Path, emitter: Emitter) -> None:
             try:
                 config = _session_config(store)
                 if config is None:
-                    emitter.chat_done("尚未配置可用的模型登录，请先输入 /login。")
+                    emitter.chat_done(_login_hint())
                     continue
                 agent = build_chat_agent(
                     config,
@@ -497,8 +499,12 @@ def _run_review_command(
     )
     if name == "/init":
         store.active.add_message("user", "/init：生成架构总览与项目上下文")
-    _run_one_review(store, task, args, emitter, scope)
-    return {"task": task, "shown_in_chat": True}
+    outcome = _run_one_review(store, task, args, emitter, scope)
+    return {
+        "task": task,
+        "shown_in_chat": True,
+        **({"empty": True, "message": outcome["message"]} if outcome.get("empty") else {}),
+    }
 
 
 def _run_one_review(
@@ -507,22 +513,74 @@ def _run_one_review(
     args: dict,
     emitter: Emitter,
     scope: str,
-) -> None:
+) -> dict[str, object]:
     """Run a single review task using the current session credential."""
-    config = _session_config(store)
-    if config is None:
-        raise ValueError("尚未配置可用的模型登录，请先输入 /login")
-    emitter.status("scanning", f"{scope}：{task}")
     params = {
         "repo_path": str(store.root),
         "branch": str(args.get("branch") or ""),
         "commit_range": str(args.get("commit_range") or ""),
     }
+    if task == "review_git":
+        review_scope = inspect_git_review_scope(
+            params["repo_path"],
+            commit_range=params["commit_range"],
+            branch=params["branch"],
+        )
+        if review_scope.empty:
+            report = _empty_git_review_report(review_scope)
+            store.active.add_message("assistant", report)
+            emitter.chat_delta(report)
+            emitter.chat_done(report)
+            return {
+                "empty": True,
+                "message": review_scope.message,
+            }
+        # Untracked-only diffs are reviewable: surface the file list so the
+        # agent knows exactly what to inspect.
+        untracked = review_scope.untracked_files
+        if untracked and not params["commit_range"] and not params["branch"]:
+            params["untracked_hint"] = "\n".join(
+                f"- 未跟踪文件（新增）：{path}" for path in untracked
+            )
+    config = _session_config(store)
+    if config is None:
+        raise ValueError(_login_hint())
+    emitter.status("scanning", f"{scope}：{task}")
     report = asyncio.run(_run_chat_review(task, config, params, emitter))
     if report:
         store.active.add_message("assistant", report)
     if task == "arch_overview" and report:
         store.remember_project_context(report)
+    return {"empty": False, "message": ""}
+
+
+def _empty_git_review_report(scope: GitReviewScope) -> str:
+    """Return a deterministic report when there is no tracked diff to review."""
+    details = [scope.message]
+    if scope.files:
+        details.extend(f"- `{path}`" for path in scope.files[:20])
+        if len(scope.files) > 20:
+            details.append(f"- 其余 {len(scope.files) - 20} 个未跟踪文件未列出")
+    return "\n".join(
+        [
+            "# Git 变更审查：未检测到变更",
+            "",
+            "## 变更概览",
+            *details,
+            "",
+            "## 高严重度问题",
+            "无。",
+            "",
+            "## 中严重度问题",
+            "无。",
+            "",
+            "## 低严重度问题",
+            "无。",
+            "",
+            "## 结论",
+            "没有可审查的 tracked diff，未调用模型。",
+        ]
+    )
 
 
 async def _run_chat_review(
@@ -537,6 +595,8 @@ async def _run_chat_review(
     if report:
         emitter.chat_delta(report)
         emitter.chat_done(report)
+    else:
+        raise ValueError(f"{task} 没有生成报告内容，请稍后重试或检查模型输出限制")
     return report
 
 
@@ -570,6 +630,9 @@ async def _collect_review(
         if event_type == EventType.TEXT_BLOCK_DELTA:
             if isinstance(event, TextBlockDeltaEvent) and event.delta:
                 parts.append(event.delta)
+        elif event_type == EventType.THINKING_BLOCK_DELTA:
+            if getattr(event, "delta", ""):
+                emitter.think_delta(event.delta)
         elif event_type in {
             EventType.TOOL_CALL_START,
             EventType.TOOL_CALL_DELTA,
@@ -598,6 +661,16 @@ async def _collect_review(
     return report
 
 
+def _login_hint() -> str:
+    """Explain why chat cannot start and which command unblocks it."""
+    if len(load_credentials()) > 1:
+        return (
+            "检测到多个已登录供应商，请先用 /provider 选择，"
+            "或设置 EXHIBIT_PROVIDER。"
+        )
+    return "尚未配置可用的模型登录，请先输入 /login。"
+
+
 def _session_config(store: SessionStore) -> Config | None:
     """Resolve the active provider credential into a model config."""
     session = store.active
@@ -611,7 +684,10 @@ def _session_config(store: SessionStore) -> Config | None:
             max_output_tokens=16000,
         )
     saved = load_credentials()
-    credential = saved.get(session.provider or "")
+    requested = (
+        session.provider or os.getenv("EXHIBIT_PROVIDER", "")
+    ).strip().lower()
+    credential = saved.get(requested) if requested else None
     if credential is None and len(saved) == 1:
         credential = next(iter(saved.values()))
     if credential is None:
@@ -657,7 +733,15 @@ async def _chat_once(agent: Agent, text: str, emitter: Emitter) -> str:
             EventType.TOOL_RESULT_END,
         }:
             _forward_tool_event(event, emitter, calls, results)
-    return "".join(parts).strip()
+        elif getattr(event, "type", None) == EventType.THINKING_BLOCK_DELTA:
+            if getattr(event, "delta", ""):
+                emitter.think_delta(event.delta)
+    reply = "".join(parts).strip()
+    if not reply:
+        raise ValueError(
+            "模型没有返回任何内容；请检查 OpenRouter 模型权限或稍后重试"
+        )
+    return reply
 
 
 if __name__ == "__main__":

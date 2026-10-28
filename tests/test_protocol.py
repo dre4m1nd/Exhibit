@@ -82,3 +82,18 @@ def test_reset_event_is_emitted() -> None:
     stream = io.StringIO()
     Emitter(stream).reset()
     assert json.loads(stream.getvalue())["type"] == "reset"
+
+
+def test_thinking_delta_is_emitted() -> None:
+    stream = io.StringIO()
+    Emitter(stream).think_delta("先看一下仓库结构")
+    assert json.loads(stream.getvalue()) == {
+        "type": "thinking_delta",
+        "text": "先看一下仓库结构",
+    }
+
+
+def test_empty_thinking_delta_is_skipped() -> None:
+    stream = io.StringIO()
+    Emitter(stream).think_delta("")
+    assert stream.getvalue() == ""

@@ -15,6 +15,7 @@ def clear_exhibit_env(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(CONFIG_ENV, str(tmp_path / "config"))
     for name in (
         "EXHIBIT_API_KEY",
+        "OPENROUTER_API_KEY",
         "EXHIBIT_BASE_URL",
         "EXHIBIT_MODEL",
         "EXHIBIT_PROVIDER",
@@ -32,7 +33,10 @@ def test_api_key_is_required(
     if api_key is not None:
         monkeypatch.setenv("EXHIBIT_API_KEY", api_key)
 
-    with pytest.raises(ValueError, match="EXHIBIT_API_KEY is required"):
+    with pytest.raises(
+        ValueError,
+        match="EXHIBIT_API_KEY or OPENROUTER_API_KEY is required",
+    ):
         load_config()
 
 
@@ -46,6 +50,31 @@ def test_defaults_use_remote_openai(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.model == DEFAULT_MODEL
     assert config.max_iters == 60
     assert config.request_timeout == 600
+
+
+def test_openrouter_key_selects_openrouter_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-env")
+
+    config = load_config()
+
+    assert config.base_url == "https://openrouter.ai/api/v1"
+    assert config.api_key == "sk-or-env"
+    assert config.model == "openrouter/free"
+
+
+def test_exhibit_key_takes_precedence_over_openrouter_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXHIBIT_API_KEY", "exhibit-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+
+    config = load_config()
+
+    assert config.base_url == DEFAULT_BASE_URL
+    assert config.api_key == "exhibit-key"
+    assert config.model == DEFAULT_MODEL
 
 
 def test_valid_remote_configuration_is_loaded(
@@ -121,6 +150,30 @@ def test_custom_endpoint_can_be_selected_explicitly(
 
     assert config.base_url == "https://gateway.example.com/v1"
     assert config.model == "custom-model"
+
+
+def test_custom_loopback_endpoint_can_be_selected_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXHIBIT_PROVIDER", "custom")
+    monkeypatch.setenv("EXHIBIT_API_KEY", "magpie")
+    monkeypatch.setenv("EXHIBIT_BASE_URL", "http://127.0.0.1:3425/v1")
+    monkeypatch.setenv("EXHIBIT_MODEL", "group/master")
+
+    config = load_config()
+
+    assert config.base_url == "http://127.0.0.1:3425/v1"
+    assert config.model == "group/master"
+
+
+def test_loopback_endpoint_requires_custom_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXHIBIT_API_KEY", "magpie")
+    monkeypatch.setenv("EXHIBIT_BASE_URL", "http://127.0.0.1:3425/v1")
+
+    with pytest.raises(ValueError, match="must use https"):
+        load_config()
 
 
 @pytest.mark.parametrize(

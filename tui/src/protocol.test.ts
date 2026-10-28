@@ -8,6 +8,12 @@ describe("parseLine", () => {
     ).toEqual({ type: "status", phase: "tool", detail: "调用 list_dir" });
   });
 
+  it("parses a thinking_delta message", () => {
+    expect(
+      parseLine('{"type":"thinking_delta","text":"先分析入口"}'),
+    ).toEqual({ type: "thinking_delta", text: "先分析入口" });
+  });
+
   it("parses a tool_call message with args", () => {
     expect(
       parseLine('{"type":"tool_call","name":"read_file","args":{"path":"a.py"}}'),

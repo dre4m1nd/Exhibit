@@ -14,6 +14,7 @@ type Block =
   | { kind: "code"; text: string }
   | { kind: "quote"; text: string }
   | { kind: "bullet"; text: string }
+  | { kind: "table"; rows: string[][] }
   | { kind: "rule" };
 
 const HEADING_PREFIX: Record<number, string> = { 1: "▌", 2: "▌", 3: "•" };
@@ -24,6 +25,7 @@ export function parseMarkdown(source: string): Block[] {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
   let code: string[] | null = null;
   let paragraph: string[] = [];
+  let table: string[][] | null = null;
 
   const flushParagraph = () => {
     if (paragraph.length > 0) {
@@ -32,10 +34,26 @@ export function parseMarkdown(source: string): Block[] {
     }
   };
 
+  const flushTable = () => {
+    if (table !== null && table.length > 0) {
+      blocks.push({ kind: "table", rows: table });
+    }
+    table = null;
+  };
+
+  const cells = (line: string): string[] =>
+    line
+      .trim()
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((cell) => cell.trim());
+
   for (const raw of lines) {
     const line = raw.replace(/\s+$/, "");
     const fence = line.match(/^```(.*)$/);
     if (fence) {
+      flushTable();
       if (code === null) {
         flushParagraph();
         code = [];
@@ -49,6 +67,19 @@ export function parseMarkdown(source: string): Block[] {
       code.push(line);
       continue;
     }
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      flushParagraph();
+      const row = cells(line);
+      // Drop the `| --- | :---: |` alignment separator.
+      if (!row.every((cell) => /^:?-{3,}:?$/.test(cell))) {
+        table ??= [];
+        table.push(row);
+      } else if (table === null) {
+        table = [];
+      }
+      continue;
+    }
+    flushTable();
     if (line.trim() === "") {
       flushParagraph();
       continue;
@@ -82,6 +113,7 @@ export function parseMarkdown(source: string): Block[] {
     }
     paragraph.push(line.trim());
   }
+  flushTable();
   flushParagraph();
   if (code !== null) blocks.push({ kind: "code", text: code.join("\n") });
   return blocks;
@@ -150,6 +182,20 @@ export function Markdown({ source, role = "assistant" }: MarkdownProps) {
                 {block.text.split("\n").map((codeLine, lineIndex) => (
                   <Text key={lineIndex} color={theme.ok}>
                     {codeLine || " "}
+                  </Text>
+                ))}
+              </Box>
+            );
+          case "table":
+            return (
+              <Box key={index} flexDirection="column">
+                {block.rows.map((row, rowIndex) => (
+                  <Text
+                    key={rowIndex}
+                    color={rowIndex === 0 ? theme.accent : color}
+                    bold={rowIndex === 0}
+                  >
+                    {row.join(" │ ")}
                   </Text>
                 ))}
               </Box>

@@ -58,6 +58,25 @@ export function buildAgentArgs(repoPath: string): string[] {
   return ["-u", "-m", "agent.app", "--repo-path", path.resolve(repoPath)];
 }
 
+/**
+ * Kill the interpreter and any launcher child it created.
+ *
+ * On Windows a virtualenv's `python.exe` can start the real interpreter as a
+ * child, so `ChildProcess.kill()` alone leaves that grandchild alive. The
+ * taskkill tree flag is only available on Windows, hence the platform branch.
+ */
+export function killProcessTree(child: ChildProcess): void {
+  if (!child.pid) return;
+  if (process.platform === "win32") {
+    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    }).on("error", () => child.kill());
+    return;
+  }
+  child.kill("SIGTERM");
+}
+
 /** Start the agent and return the subprocess handle. */
 function writeLine(child: ChildProcess, message: Record<string, unknown>): void {
   if (!child.stdin?.writable) return;
@@ -121,7 +140,7 @@ export function startAgent(options: BridgeOptions): AgentBridge {
       });
     },
     stop() {
-      child.kill();
+      killProcessTree(child);
     },
   };
 }

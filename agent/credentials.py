@@ -76,7 +76,7 @@ def save_credential(
     endpoint_input = base_url.strip() or known.base_url
     if not endpoint_input:
         raise ValueError("base URL is required for a custom endpoint")
-    endpoint = validate_base_url(endpoint_input)
+    endpoint = validate_base_url(endpoint_input, provider=known.key)
     selected_model = model.strip() or (known.models[0] if known.models else "")
     if not selected_model:
         raise ValueError("model is required for a custom endpoint")

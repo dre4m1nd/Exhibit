@@ -8,7 +8,7 @@ import io
 
 from agent.chat import handle_command
 from agent.config import Config
-from agent.credentials import CONFIG_ENV
+from agent.credentials import CONFIG_ENV, load_credentials, save_credential
 from agent.permissions import FileEditor
 from agent.protocol import Emitter
 from agent.session import SessionStore
@@ -33,6 +33,30 @@ def test_login_and_status_commands(isolated_env, monkeypatch) -> None:
     status = handle_command(store, "/status", {})
     assert status["provider"] == "deepseek"
     assert status["mode"] == "agent"
+
+
+def test_openrouter_login_is_validated_and_saved(
+    isolated_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SessionStore(isolated_env)
+    checked: list[tuple[str, str, str]] = []
+
+    def validate(base_url: str, api_key: str, model: str) -> None:
+        checked.append((base_url, api_key, model))
+
+    monkeypatch.setattr("agent.session.validate_api_key", validate)
+    result = handle_command(
+        store,
+        "/login",
+        {"provider": "openrouter", "api_key": "sk-or-test-abcdefghij"},
+    )
+
+    assert result == {"provider": "openrouter", "model": "openrouter/free"}
+    assert checked == [
+        ("https://openrouter.ai/api/v1", "sk-or-test-abcdefghij", "openrouter/free")
+    ]
+    assert load_credentials()["openrouter"].model == "openrouter/free"
 
 
 def test_failed_login_is_not_saved(isolated_env, monkeypatch) -> None:
@@ -361,6 +385,32 @@ def test_logout_clears_active_credential(isolated_env, monkeypatch) -> None:
     assert session.api_key is None
 
 
+def test_logout_loads_the_only_saved_provider(
+    isolated_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    save_credential("deepseek", "sk-test-abcdefghij")
+    store = SessionStore(isolated_env)
+    monkeypatch.setattr("agent.chat.remove_credential", lambda _: True)
+
+    result = handle_command(store, "/logout", {"confirm": True})
+
+    assert result == {"removed": True, "provider": "deepseek"}
+    assert store.active.provider is None
+
+
+def test_provider_switch_returns_new_model(isolated_env) -> None:
+    save_credential("deepseek", "sk-test-abcdefghij")
+    save_credential("qwen", "sk-test-abcdefghij", model="qwen3-coder-plus")
+    store = SessionStore(isolated_env)
+    store.active.configure(load_credentials()["deepseek"])
+
+    result = handle_command(store, "/provider", {"provider": "qwen"})
+
+    assert result == {"provider": "qwen", "model": "qwen3-coder-plus"}
+    assert store.active.provider == "qwen"
+
+
 def test_logout_of_another_provider_keeps_session_credential(
     isolated_env,
     monkeypatch: pytest.MonkeyPatch,
@@ -458,3 +508,75 @@ def test_compact_retains_init_context(isolated_env) -> None:
     contents = "\n".join(item["content"] for item in store.active.history)
     assert "# 架构总览" in contents
     assert "入口是 app.py" in contents
+
+
+def test_model_without_arguments_returns_catalog(isolated_env, monkeypatch) -> None:
+    store = SessionStore(isolated_env)
+    save_credential("deepseek", "sk-test-abcdefghij")
+    store.active.configure(load_credentials()["deepseek"])
+    monkeypatch.setattr(
+        "agent.chat.discover_model_catalog",
+        lambda provider, model: {
+            "kind": "model_catalog",
+            "current": {"provider": provider, "model": model},
+            "providers": [
+                {
+                    "key": provider,
+                    "label": "DeepSeek",
+                    "source": "fallback",
+                    "error": "",
+                    "models": [model],
+                }
+            ],
+        },
+    )
+
+    result = handle_command(store, "/model", {})
+
+    assert result["kind"] == "model_catalog"
+    assert result["current"] == {
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+    }
+
+
+def test_model_with_model_only_switches_current_provider(isolated_env) -> None:
+    store = SessionStore(isolated_env)
+    save_credential("deepseek", "sk-test-abcdefghij")
+
+    result = handle_command(store, "/model", {"model": "deepseek-reasoner"})
+
+    assert result == {
+        "kind": "model_selected",
+        "provider": "deepseek",
+        "model": "deepseek-reasoner",
+    }
+    assert store.active.provider == "deepseek"
+    assert store.active.model == "deepseek-reasoner"
+
+
+def test_model_with_provider_and_model_switches_both(isolated_env) -> None:
+    store = SessionStore(isolated_env)
+    for provider in ("deepseek", "qwen"):
+        save_credential(provider, "sk-test-abcdefghij")
+    store.active.configure(load_credentials()["deepseek"])
+
+    result = handle_command(
+        store,
+        "/model",
+        {"provider": "qwen", "model": "qwen3-coder-plus"},
+    )
+
+    assert result == {
+        "kind": "model_selected",
+        "provider": "qwen",
+        "model": "qwen3-coder-plus",
+    }
+    assert store.active.provider == "qwen"
+    assert store.active.model == "qwen3-coder-plus"
+
+
+def test_model_with_provider_requires_a_model(isolated_env) -> None:
+    store = SessionStore(isolated_env)
+    with pytest.raises(ValueError, match="model is required"):
+        handle_command(store, "/model", {"provider": "qwen"})

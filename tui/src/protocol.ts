@@ -27,6 +27,7 @@ export type AgentMessage =
   | { type: "done" }
   | { type: "chat_delta"; text: string }
   | { type: "chat_done"; text: string }
+  | { type: "thinking_delta"; text: string }
   | { type: "command_result"; name: string; data: Record<string, unknown> }
   | {
       type: "permission_request";
@@ -80,6 +81,8 @@ export function parseLine(line: string): AgentMessage | null {
       case "chat_delta":
         return { type, text: String(record.text ?? "") };
       case "chat_done":
+        return { type, text: String(record.text ?? "") };
+      case "thinking_delta":
         return { type, text: String(record.text ?? "") };
       case "command_result":
         return {

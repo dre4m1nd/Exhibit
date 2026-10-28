@@ -1,20 +1,35 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Static, Text, useApp, useInput } from "ink";
 import { startAgent, type AgentBridge } from "../bridge.js";
 import { Header } from "./Header.js";
-import { ChatView, type ChatMessage } from "./ChatView.js";
+import type { ChatMessage } from "./ChatView.js";
+import { ChatViewport } from "./ChatViewport.js";
 import { PlanBanner } from "./PlanBanner.js";
 import { LoginDialog, type LoginRequest } from "./LoginDialog.js";
+import { ModelDialog } from "./ModelDialog.js";
 import { PermissionPrompt, type PermissionScope } from "./PermissionPrompt.js";
 import {
   moveSelection,
   parseCommandArgs,
   suggestionsFor,
 } from "../commands.js";
+import { parseModelCatalog, type ModelCatalog } from "../models.js";
+import {
+  appendTraceStep,
+  summarizeTrace,
+  type TraceStep,
+} from "../trace.js";
 import { theme } from "../theme.js";
 import type { AgentMessage } from "../protocol.js";
 
-type Screen = "chat" | "login" | "login-busy" | "permission" | "confirm";
+type Screen =
+  | "chat"
+  | "login"
+  | "login-busy"
+  | "model"
+  | "model-busy"
+  | "permission"
+  | "confirm";
 /** Commands that ask the user to confirm before reaching the agent. */
 const CONFIRM_COMMANDS = new Set(["/logout", "/clear"]);
 const CONFIRM_HINT: Record<string, string> = {
@@ -37,31 +52,63 @@ const PERMISSION_STATUS: Record<PermissionScope, string> = {
   reject: "已拒绝修改",
 };
 
-export function App({ model, repoPath }: { model: string; repoPath: string }) {
+export function App({
+  model,
+  repoPath,
+  version = "0.1.0",
+}: {
+  model: string;
+  repoPath: string;
+  version?: string;
+}) {
   const { exit } = useApp();
   const [screen, setScreen] = useState<Screen>("chat");
+  const [activeModel, setActiveModel] = useState(model);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("就绪 · 输入 / 查看命令");
   const [busy, setBusy] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
+  const [modelError, setModelError] = useState("");
   const [permission, setPermission] = useState<PermissionRequest | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [selected, setSelected] = useState(-1);
   const [elapsed, setElapsed] = useState(0);
+  const [draft, setDraft] = useState<ChatMessage | null>(null);
   const busyStart = useRef<number | null>(null);
   const bridge = useRef<AgentBridge | null>(null);
   const screenRef = useRef<Screen>("chat");
   const nextId = useRef(0);
   const stream = useRef("");
+  const assistantId = useRef<number | null>(null);
+  const [traceExpanded, setTraceExpanded] = useState(false);
+  const [liveTrace, setLiveTrace] = useState<TraceStep[]>([]);
+  const traceRef = useRef<{ thinking: string; steps: TraceStep[] }>({
+    thinking: "",
+    steps: [],
+  });
+  const headerItems = useRef([`${repoPath}\0${model}`]).current;
 
   const append = useCallback((role: ChatMessage["role"], text: string) => {
-    setMessages((previous) => [
-      ...previous.slice(-199),
-      { id: nextId.current++, role, text },
-    ]);
+    const id = nextId.current++;
+    setMessages((previous) => [...previous, { id, role, text }]);
+    return id;
   }, []);
+
+  const commit = useCallback(
+    (
+      role: ChatMessage["role"],
+      text: string,
+      options: Pick<ChatMessage, "kind" | "ok" | "duration" | "steps" | "collapsedSummary"> = {},
+    ) => {
+      const id = nextId.current++;
+    setMessages((previous) => [...previous, { id, role, text, ...options }]);
+      return id;
+    },
+    [],
+  );
 
   const finishBusy = useCallback(
     (nextStatus = "就绪") => {
@@ -69,38 +116,49 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
         busyStart.current === null
           ? 0
           : (Date.now() - busyStart.current) / 1000;
-      // Keep the completed duration on the final assistant message so the
-      // history shows how long each review took, not just the latest run.
-      if (duration > 0) {
-        setMessages((previous) => {
-          for (let index = previous.length - 1; index >= 0; index -= 1) {
-            const item = previous[index];
-            if (item?.role === "assistant" && item.kind === undefined) {
-              const next = [...previous];
-              next[index] = { ...item, duration };
-              return next;
-            }
-          }
-          return previous;
-        });
-      }
       setElapsed(duration);
+      setDraft((current) =>
+        current?.role === "assistant" && current.kind === undefined && duration > 0
+          ? { ...current, duration }
+          : current,
+      );
       setBusy(false);
       setStatus(nextStatus);
       busyStart.current = null;
+      return duration;
     },
     [],
   );
 
-  const appendTool = useCallback(
-    (kind: "tool" | "tool-result", text: string, ok = true) => {
-      setMessages((previous) => [
-        ...previous.slice(-199),
-        { id: nextId.current++, role: "system", text, kind, ok },
-      ]);
-    },
-    [],
-  );
+  const takeTrace = useCallback((): Pick<
+    ChatMessage,
+    "steps" | "collapsedSummary"
+  > => {
+    const steps = traceRef.current.steps;
+    if (steps.length === 0) {
+      traceRef.current = { thinking: "", steps: [] };
+      setLiveTrace([]);
+      return {};
+    }
+    const summary = summarizeTrace(steps);
+    traceRef.current = { thinking: "", steps: [] };
+    setLiveTrace([]);
+    return { steps, collapsedSummary: summary };
+  }, []);
+
+  const commitTrace = useCallback(() => {
+    const trace = takeTrace();
+    if (!trace.steps || trace.steps.length === 0) return;
+    commit("system", trace.collapsedSummary ?? "", {
+      kind: "trace",
+      ...trace,
+    });
+  }, [commit, takeTrace]);
+
+  const addTraceStep = useCallback((step: TraceStep) => {
+    traceRef.current.steps = appendTraceStep(traceRef.current.steps, step);
+    setLiveTrace(traceRef.current.steps);
+  }, []);
 
   // Track how long the agent has been working, updating once per second.
   const updateElapsed = useCallback(() => {
@@ -132,6 +190,7 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
       if (name === "/login") {
         setScreen("chat");
         setLoginError("");
+        setActiveModel(String(data.model ?? ""));
         append("system", `已登录 ${String(data.provider ?? "")} · ${String(data.model ?? "")}`);
         setStatus("登录成功");
         return;
@@ -150,6 +209,33 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
         append("system", formatStatus(data));
         return;
       }
+      if (name === "/model" && data.kind === "model_catalog") {
+        const catalog = parseModelCatalog(data);
+        if (catalog) {
+          setModelCatalog(catalog);
+          setModelError("");
+          const available = catalog.providers.length > 0;
+          setScreen(available ? "model" : "chat");
+          if (!available) {
+            append("system", "尚未登录任何供应商，请先输入 /login。");
+            setStatus("没有可用模型");
+          }
+          return;
+        }
+      }
+      if (name === "/model" && data.kind === "model_selected") {
+        const selectedModel = String(data.model ?? "");
+        setActiveModel(selectedModel);
+        setModelCatalog(null);
+        setModelError("");
+        setScreen("chat");
+        append(
+          "system",
+          `已切换为 ${String(data.provider ?? "")} · ${selectedModel}`,
+        );
+        setStatus("模型已切换");
+        return;
+      }
       if (name === "/quit" && data.can_quit === true) {
         exit();
         return;
@@ -163,39 +249,61 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
         );
         return;
       }
-      if (name === "/init" || name === "/review" || name === "/diff") {
-        append("system", `已完成 ${name}`);
+      if (name === "/provider" && data.provider) {
+        setActiveModel(String(data.model ?? ""));
+        append(
+          "system",
+          `已切换为 ${String(data.provider)} · ${String(data.model ?? "")}`,
+        );
         return;
       }
-      append("system", `${name}: ${JSON.stringify(data)}`);
-    },
-    [append, exit],
-  );
+      if (name === "/init" || name === "/review" || name === "/diff") {
+        if (data.empty !== true) {
+          append("system", `已完成 ${name}`);
+        }
+        return;
+      }
+      // Every remaining command must surface its structured result in chat
+      // via the shared formatter below.
+      const text = describeCommandResult(name, data);
+      if (text) append("system", text);
+  },
+  [append, exit],
+);
 
   const handleMessage = useCallback(
     (message: AgentMessage) => {
       switch (message.type) {
         case "chat_delta":
           stream.current += message.text;
-          setMessages((previous) => {
-            const last = previous[previous.length - 1];
-            if (last?.role === "assistant") {
-              return [...previous.slice(0, -1), { ...last, text: stream.current }];
-            }
-            return [
-              ...previous,
-              { id: nextId.current++, role: "assistant", text: stream.current },
-            ];
+          if (assistantId.current === null) {
+            assistantId.current = nextId.current++;
+          }
+          setDraft({
+            id: assistantId.current,
+            role: "assistant",
+            text: stream.current,
           });
           break;
         case "chat_done":
-          if (message.text && !stream.current) append("assistant", message.text);
+          {
+            const text = message.text || stream.current;
+            const duration = finishBusy();
+            commitTrace();
+            if (text) commit("assistant", text, { duration });
+          }
+          setDraft(null);
           stream.current = "";
-          finishBusy();
+          assistantId.current = null;
           break;
         case "command_result":
+          commitTrace();
           handleCommandResult(message.name, message.data);
-          finishBusy();
+          finishBusy(
+            message.name === "/diff" && message.data.empty === true
+              ? "没有可审查的变更"
+              : "就绪",
+          );
           break;
         case "permission_request":
           setPermission({
@@ -209,12 +317,27 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
           setScreen("permission");
           break;
         case "report":
-          append("assistant", message.markdown);
-          finishBusy();
+          {
+            const duration = finishBusy();
+            commitTrace();
+            commit("assistant", message.markdown, { duration });
+          }
+          setDraft(null);
+          assistantId.current = null;
           break;
         case "error":
-          append("system", message.message);
-          finishBusy("出错");
+          {
+            const duration = finishBusy("出错");
+            commitTrace();
+            commit("system", message.message, { duration });
+          }
+          setDraft(null);
+          assistantId.current = null;
+          if (screenRef.current === "model-busy") {
+            setModelError(message.message);
+            setScreen("model");
+            return;
+          }
           if (screenRef.current === "login-busy") {
             setLoginError(message.message);
             setScreen("login");
@@ -229,17 +352,30 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
           break;
         case "tool_call":
           setStatus(`${message.name}(${formatArgs(message.args)})`);
-          appendTool("tool", `${message.name}(${formatArgs(message.args)})`);
+          addTraceStep({
+            type: "tool",
+            text: `${message.name}(${formatArgs(message.args)})`,
+          });
           break;
         case "tool_result":
           setStatus(`${message.name} → ${message.summary}`);
-          appendTool("tool-result", `${message.name} → ${message.summary}`, message.ok);
+          addTraceStep({
+            type: "tool-result",
+            text: `${message.name} → ${message.summary}`,
+            ok: message.ok,
+          });
+          break;
+        case "thinking_delta":
+          addTraceStep({
+            type: "thinking",
+            text: message.text,
+          });
           break;
         default:
           break;
       }
     },
-    [append, appendTool, finishBusy, handleCommandResult],
+    [addTraceStep, append, commit, commitTrace, finishBusy, handleCommandResult],
   );
 
   useEffect(() => {
@@ -263,30 +399,52 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
     (value: string) => {
       const text = value.trim();
       if (!text || busy) return;
+      setDraft(null);
+      stream.current = "";
+      assistantId.current = null;
       setInput("");
       setSelected(-1);
       if (text === "/quit") {
+        append("user", text);
         setBusy(true);
         bridge.current?.sendCommand("/quit");
         return;
       }
       if (text === "/login") {
+        append("user", text);
         setLoginError("");
         setScreen("login");
         return;
       }
+      if (text === "/model") {
+        append("user", text);
+        setBusy(true);
+        setStatus("发现模型目录");
+        bridge.current?.sendCommand("/model");
+        return;
+      }
       if (text.startsWith("/") && CONFIRM_COMMANDS.has((text.split(/\s+/)[0] ?? "").toLowerCase())) {
+        append("user", text);
         setConfirming((text.split(/\s+/)[0] ?? "").toLowerCase());
         return;
       }
       if (text.startsWith("/")) {
+        // Echo every slash command so the conversation history shows what
+        // was requested, including commands that open a dedicated screen.
+        append("user", text);
         const [name, ...rest] = text.split(/\s+/);
+        if (name === "/model" && rest[0]) {
+          // Preserve direct switching for automation and power users.
+          setBusy(true);
+          setStatus("切换模型");
+          bridge.current?.sendCommand("/model", { model: rest[0] });
+          return;
+        }
         setBusy(true);
         bridge.current?.sendCommand(name ?? "", parseCommandArgs(name ?? "", rest));
         return;
       }
       append("user", text);
-      stream.current = "";
       setBusy(true);
       setStatus("模型推理中");
       bridge.current?.sendChat(text);
@@ -339,8 +497,15 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
         return;
       }
       if (key.ctrl && value === "c") {
-        setBusy(true);
-        bridge.current?.sendCommand("/quit");
+        // Hard exit: kill the agent subprocess and leave immediately so a
+        // stuck /quit (e.g. blocked by unconfirmed writes) can't leave an
+        // orphaned TUI + agent pair behind. Graceful exit stays on /quit.
+        bridge.current?.stop();
+        exit();
+        return;
+      }
+      if (key.ctrl && value === "t") {
+        setTraceExpanded((current) => !current);
         return;
       }
       if (value && !key.ctrl && !key.meta) {
@@ -362,6 +527,22 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
       model: request.model,
       base_url: request.baseUrl,
     });
+  };
+
+  const selectModel = (provider: string, modelId: string) => {
+    setModelError("");
+    setScreen("model-busy");
+    setBusy(true);
+    bridge.current?.sendCommand("/model", { provider, model: modelId });
+  };
+
+  const retryModelCatalog = () => {
+    setModelError("");
+    setModelCatalog(null);
+    setScreen("chat");
+    setBusy(true);
+    setStatus("发现模型目录");
+    bridge.current?.sendCommand("/model");
   };
 
   const decidePermission = (scope: PermissionScope) => {
@@ -401,7 +582,17 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
 
   return (
     <Box flexDirection="column">
-      <Header taskTitle="Exhibit Chat" repoPath={repoPath} model={model} />
+      <Static items={headerItems}>
+        {() => (
+          <Header
+            key="header"
+            taskTitle="Exhibit Chat"
+            repoPath={repoPath}
+            model={activeModel}
+            version={version}
+          />
+        )}
+      </Static>
       <Box height={1} />
       <PlanBanner active={planMode} />
       {screen === "login" || screen === "login-busy" ? (
@@ -410,6 +601,19 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
           onSubmit={finishLogin}
           busy={screen === "login-busy"}
           error={loginError}
+        />
+      ) : (screen === "model" || screen === "model-busy") && modelCatalog ? (
+        <ModelDialog
+          catalog={modelCatalog}
+          busy={screen === "model-busy"}
+          error={modelError}
+          onCancel={() => {
+            setModelCatalog(null);
+            setModelError("");
+            setScreen("chat");
+          }}
+          onRetry={retryModelCatalog}
+          onSelect={selectModel}
         />
       ) : screen === "permission" && permission ? (
         <PermissionPrompt
@@ -427,19 +631,86 @@ export function App({ model, repoPath }: { model: string; repoPath: string }) {
           <Text color={theme.text}>{CONFIRM_HINT[confirming] ?? "确认执行？"}</Text>
         </Box>
       ) : (
-        <ChatView
+        <ChatViewport
           messages={messages}
+          draft={draft}
           input={input}
           status={status}
           planMode={planMode}
           busy={busy}
           selected={selected}
           elapsed={elapsed}
+          traceExpanded={traceExpanded}
+          liveTrace={liveTrace}
         />
       )}
-      {screen !== "chat" ? <Text color={theme.muted}>Esc 返回 · Ctrl+C 退出</Text> : null}
+      {screen !== "chat" ? <Text color={theme.muted}>Esc 返回 · Ctrl+C 取消</Text> : null}
     </Box>
   );
+}
+
+/**
+ * Human-readable result for slash commands that don't open a dedicated screen
+ * or stream a report. Returns "" for commands without a meaningful result line
+ * so callers can skip echoing. Keeping this pure makes every command's result
+ * echoable and unit-testable, and covers commands the chat previously dropped.
+ */
+export function describeCommandResult(
+  name: string,
+  data: Record<string, unknown>,
+): string {
+  switch (name) {
+    case "/logout":
+      return `已退出登录 ${String(data.provider ?? "")}`;
+    case "/clear":
+      return "对话上下文已清空";
+    case "/compact":
+      return `已压缩上下文，保留 ${String(data.messages ?? 0)} 条，文件变更：${
+        Array.isArray(data.changed_files)
+          ? (data.changed_files as unknown[]).join(", ") || "无"
+          : "无"
+      }`;
+    case "/permissions":
+      return `模式 ${String(data.mode ?? "")} · 写入权限 ${
+        data.writes ? "开启" : "仅只读"
+      } · 确认策略 ${String(data.confirmation ?? "")}`;
+    case "/files":
+      return `已读 ${formatList(data.read_files)} · 已改 ${formatList(data.changed_files)}`;
+    case "/undo":
+      return data.undone ? `已撤销：${String(data.undone)}` : "没有可撤销的修改";
+    case "/commands":
+      return formatCommands(data.commands);
+    default:
+      return `${name}: ${JSON.stringify(data)}`;
+  }
+}
+
+/** Commands arrive as `{name, description}` objects, not plain strings. */
+function formatCommands(value: unknown): string {
+  const rows = Array.isArray(value) ? (value as unknown[]) : [];
+  const lines = rows
+    .map((item) => {
+      if (item && typeof item === "object") {
+        const record = item as Record<string, unknown>;
+        const name = String(record.name ?? "").trim();
+        const description = String(record.description ?? "").trim();
+        if (name) return description ? `${name} · ${description}` : name;
+      }
+      return String(item ?? "").trim();
+    })
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) return "没有可用命令";
+  return ["可用命令：", ...lines].join("\n");
+}
+
+function formatList(value: unknown, prefix = ""): string {
+  const items = Array.isArray(value)
+    ? (value as unknown[]).map((item) =>
+        item && typeof item === "object" ? JSON.stringify(item) : String(item),
+      )
+    : [];
+  if (items.length === 0) return prefix ? `${prefix}无` : "无";
+  return prefix ? `${prefix}${items.join(", ")}` : items.join(", ");
 }
 
 function formatStatus(data: Record<string, unknown>): string {

@@ -3,7 +3,7 @@
 
 import React from "react";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { render } from "ink";
@@ -50,6 +50,18 @@ export function ensureFreshBuild(): void {
 
 const model = process.env.EXHIBIT_MODEL ?? "gpt-5.4-mini";
 
+/** Read the TUI version from package.json without importing outside rootDir. */
+function readVersion(): string {
+  try {
+    const tuiRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const pkgPath = path.join(tuiRoot, "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version?: string };
+    return pkg.version ?? "0.1.0";
+  } catch {
+    return "0.1.0";
+  }
+}
+
 let options;
 try {
   ensureFreshBuild();
@@ -61,6 +73,8 @@ try {
   options = null;
 }
 
+const version = readVersion();
+
 if (options?.help) {
   console.log(USAGE);
 } else if (options) {
@@ -68,7 +82,9 @@ if (options?.help) {
     if (!statSync(options.repoPath).isDirectory()) {
       throw new Error(`目标路径不是目录: ${options.repoPath}`);
     }
-    render(<App model={model} repoPath={options.repoPath} />);
+    render(<App model={model} repoPath={options.repoPath} version={version} />, {
+      exitOnCtrlC: false,
+    });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

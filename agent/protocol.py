@@ -29,6 +29,7 @@ MSG_ERROR = "error"
 MSG_DONE = "done"
 MSG_CHAT_DELTA = "chat_delta"
 MSG_CHAT_DONE = "chat_done"
+MSG_THINKING = "thinking_delta"
 MSG_COMMAND_RESULT = "command_result"
 MSG_PERMISSION_REQUEST = "permission_request"
 MSG_SESSION = "session"
@@ -120,6 +121,11 @@ class Emitter:
 
     def chat_done(self, text: str = "") -> None:
         self.send({"type": MSG_CHAT_DONE, "text": text})
+
+    def think_delta(self, text: str) -> None:
+        """Stream a model reasoning chunk for the TUI's collapsible trace."""
+        if text:
+            self.send({"type": MSG_THINKING, "text": text})
 
     def command_result(self, name: str, data: Any = None) -> None:
         self.send({"type": MSG_COMMAND_RESULT, "name": name, "data": data or {}})
