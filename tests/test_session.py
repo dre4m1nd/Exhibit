@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent.credentials import CONFIG_ENV
+from agent.credentials import CONFIG_ENV, save_credential
 from agent.session import (
     SessionStore,
     command_catalog,
@@ -122,13 +122,14 @@ def test_switch_model_loads_the_only_saved_provider() -> None:
     assert fresh.model == "deepseek-reasoner"
 
 
-def test_switch_model_requires_a_choice_with_multiple_providers() -> None:
+def test_switch_model_finds_the_owner_with_multiple_providers() -> None:
     login(SessionStore(".").active, "deepseek", "sk-test-abcdefghij")
     login(SessionStore(".").active, "qwen", "sk-test-abcdefghij")
     fresh = SessionStore(".").active
 
-    with pytest.raises(ValueError, match="multiple providers"):
-        switch_model(fresh, "deepseek-reasoner")
+    assert switch_model(fresh, "deepseek-reasoner") == "deepseek-reasoner"
+    assert fresh.provider == "deepseek"
+    assert fresh.model == "deepseek-reasoner"
 
 
 def test_provider_catalog_reports_login_state() -> None:
@@ -147,3 +148,62 @@ def test_switching_to_unauthenticated_provider_is_rejected() -> None:
     store = SessionStore(".")
     with pytest.raises(ValueError, match="/login"):
         switch_provider(store.active, "openai")
+
+
+def test_switch_model_resolves_a_bare_model_id_to_its_provider() -> None:
+    save_credential(
+        "deepseek",
+        "k1",
+        model="deepseek-chat",
+        base_url="https://api.deepseek.com/v1",
+    )
+    save_credential(
+        "custom",
+        "k2",
+        model="group/master",
+        base_url="http://127.0.0.1:3425/v1",
+    )
+    session = SessionStore(".").active
+
+    assert switch_model(session, "group/master") == "group/master"
+    assert session.provider == "custom"
+    assert session.base_url == "http://127.0.0.1:3425/v1"
+    assert session.api_key == "k2"
+
+
+def test_switch_model_matches_a_builtin_model_to_its_provider() -> None:
+    save_credential(
+        "deepseek",
+        "k1",
+        model="deepseek-chat",
+        base_url="https://api.deepseek.com/v1",
+    )
+    save_credential(
+        "custom",
+        "k2",
+        model="group/master",
+        base_url="http://127.0.0.1:3425/v1",
+    )
+    session = SessionStore(".").active
+
+    assert switch_model(session, "deepseek-chat") == "deepseek-chat"
+    assert session.provider == "deepseek"
+
+
+def test_switch_model_reports_an_unknown_id_with_several_providers() -> None:
+    save_credential(
+        "deepseek",
+        "k1",
+        model="deepseek-chat",
+        base_url="https://api.deepseek.com/v1",
+    )
+    save_credential(
+        "custom",
+        "k2",
+        model="group/master",
+        base_url="http://127.0.0.1:3425/v1",
+    )
+    session = SessionStore(".").active
+
+    with pytest.raises(ValueError, match="unknown to the logged-in providers"):
+        switch_model(session, "no-such-model")

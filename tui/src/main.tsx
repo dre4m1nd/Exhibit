@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { render } from "ink";
 import { App } from "./components/App.js";
+import { buildBanner } from "./components/Header.js";
 import { parseCliArgs, USAGE } from "./cli.js";
 
 /**
@@ -82,7 +83,16 @@ if (options?.help) {
     if (!statSync(options.repoPath).isDirectory()) {
       throw new Error(`目标路径不是目录: ${options.repoPath}`);
     }
-    render(<App model={model} repoPath={options.repoPath} version={version} />, {
+    // Ink only prints the first <Static> block in a tree, so the banner is
+    // written into scrollback once here and the chat log keeps the only Static.
+    process.stdout.write(
+      buildBanner({
+        taskTitle: "Exhibit Chat",
+        repoPath: options.repoPath,
+        version,
+      }).join("\n") + "\n",
+    );
+    render(<App model={model} repoPath={options.repoPath} />, {
       exitOnCtrlC: false,
     });
   } catch (error) {

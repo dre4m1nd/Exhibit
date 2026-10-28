@@ -234,3 +234,33 @@ def test_review_scope_reports_an_empty_commit_range(tmp_path: Path) -> None:
 def test_fixture_repo_is_a_source_tree() -> None:
     assert (FIXTURE / "README.md").is_file()
     assert (FIXTURE / "src" / "core" / "report.py").is_file()
+
+
+def test_git_tools_ignore_the_process_cwd_outside_the_review_root(tmp_path: Path) -> None:
+    """A review must never report the agent's own repository state."""
+    reviewed = tmp_path / "reviewed"
+    elsewhere = tmp_path / "elsewhere"
+    for repo, name in ((reviewed, "reviewed.txt"), (elsewhere, "elsewhere.txt")):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        (repo / name).write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "add", name], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=Test", "-c", "user.email=t@example.com",
+             "commit", "-qm", "init"],
+            cwd=repo,
+            check=True,
+        )
+    (reviewed / "changed.txt").write_text("y\n", encoding="utf-8")
+    (elsewhere / "noise.txt").write_text("z\n", encoding="utf-8")
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("EXHIBIT_REPO_ROOT", str(reviewed))
+        monkeypatch.chdir(elsewhere)
+        status = git_status(".")
+    finally:
+        monkeypatch.undo()
+
+    assert "changed.txt" in status
+    assert "noise.txt" not in status

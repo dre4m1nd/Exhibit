@@ -1,12 +1,9 @@
 import React from "react";
-import { Box, Text } from "ink";
-import { theme } from "../theme.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../commands.js";
 
 interface HeaderProps {
   taskTitle: string;
   repoPath: string;
-  model: string;
   version?: string;
 }
 
@@ -35,16 +32,16 @@ const QUICK_COMMANDS = ["/login", "/review", "/diff", "/model", "/provider", "/p
 export function buildBanner(args: {
   taskTitle: string;
   repoPath: string;
-  model: string;
   version: string;
 }): string[] {
-  const { taskTitle, repoPath, model, version } = args;
+  const { taskTitle, repoPath, version } = args;
   const logo = LOGO;
+  // The model is deliberately absent: chat mode resolves it from the saved
+  // credential, so the always-visible status bar is the only truthful place.
   const welcome = [
     "  终端架构与审查智能体",
     `  ${taskTitle}`,
     "",
-    `  ${model}`,
     `  ${repoPath}`,
   ];
   const commandRows = QUICK_COMMANDS.map(
@@ -89,19 +86,4 @@ export function buildBanner(args: {
   const titleRow = `╭${title}${"─".repeat(innerWidth - title.length + 2)}╮`;
   const bottom = `╰${"─".repeat(innerWidth + 2)}╯`;
   return [titleRow, ...body, bottom];
-}
-
-/** The one-time branded banner written into terminal history. */
-export function Header({ taskTitle, repoPath, model, version = "0.1.0" }: HeaderProps) {
-  const lines = buildBanner({ taskTitle, repoPath, model, version });
-  return (
-    <Box flexDirection="column">
-      {lines.map((line, index) => (
-        <Text key={index} color={theme.border}>
-          {line}
-        </Text>
-      ))}
-      <Box height={1} />
-    </Box>
-  );
 }

@@ -242,12 +242,52 @@ def ensure_provider(session: Session) -> str:
     return provider
 
 
+def _known_models(provider_key: str, credential: SavedCredential) -> set[str]:
+    """Model ids a provider is known to expose, used to disambiguate /model."""
+    models = {credential.model} if credential.model else set()
+    provider = PROVIDERS.get(provider_key)
+    if provider is not None:
+        models.update(provider.models)
+    return models
+
+
+def _model_provider(session: Session, model: str) -> str:
+    """Return the logged-in provider that owns ``model``.
+
+    `/model <id>` carries no provider, so a bare id is matched against each
+    provider's known models instead of failing whenever more than one provider
+    is logged in.
+    """
+    if session.provider:
+        return session.provider
+    saved = load_credentials()
+    if not saved:
+        raise ValueError("no provider is logged in; use /login")
+    if len(saved) == 1:
+        return next(iter(saved))
+    matches = sorted(
+        key for key, credential in saved.items() if model in _known_models(key, credential)
+    )
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        raise ValueError(
+            f"model '{model}' is offered by {', '.join(matches)}; "
+            "pick one with /provider, then run /model again"
+        )
+    choices = ", ".join(sorted(saved))
+    raise ValueError(
+        f"model '{model}' is unknown to the logged-in providers ({choices}); "
+        "pick a provider with /provider, then run /model again"
+    )
+
+
 def switch_model(session: Session, model: str) -> str:
     """Select and persist a model while keeping the active credential."""
     selected = model.strip()
     if not selected:
         raise ValueError("model is required")
-    provider = ensure_provider(session)
+    provider = _model_provider(session, selected)
     saved = load_credentials().get(provider)
     if saved is None:
         raise ValueError(f"provider '{provider}' is not logged in; use /login")
@@ -257,7 +297,16 @@ def switch_model(session: Session, model: str) -> str:
         model=selected,
         base_url=saved.base_url,
     )
-    session.model = selected
+    # Keep provider, base_url and api_key consistent with the chosen model so
+    # the next turn does not keep calling the previous provider.
+    session.configure(
+        SavedCredential(
+            provider=provider,
+            base_url=saved.base_url,
+            model=selected,
+            api_key=saved.api_key,
+        )
+    )
     return selected
 
 

@@ -273,6 +273,9 @@ def _chat_loop(repo_path: Path, emitter: Emitter) -> None:
     store = SessionStore(repo_path)
     editor = FileEditor(repo_path)
     os.environ["EXHIBIT_REPO_ROOT"] = str(repo_path)
+    # Resolve the credential before the first status event so /status reports
+    # the provider and model the session will actually use.
+    _session_config(store)
     emitter.session(store.status())
     while True:
         line = sys.stdin.readline()

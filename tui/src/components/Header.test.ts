@@ -5,7 +5,6 @@ describe("buildBanner", () => {
   const lines = buildBanner({
     taskTitle: "Exhibit Chat",
     repoPath: "D:\\Code\\Exhibit",
-    model: "magpie/group/master",
     version: "1.2.3",
   });
 
@@ -23,10 +22,9 @@ describe("buildBanner", () => {
     expect(lines[0]).toContain("Exhibit v1.2.3");
   });
 
-  it("renders the wordmark and the model/repo status", () => {
+  it("renders the wordmark and the repository path", () => {
     const text = lines.join("\n");
     expect(text).toContain("██");
-    expect(text).toContain("magpie/group/master");
     expect(text).toContain("D:\\Code\\Exhibit");
   });
 

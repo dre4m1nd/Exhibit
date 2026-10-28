@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Static, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp, useInput } from "ink";
 import { startAgent, type AgentBridge } from "../bridge.js";
-import { Header } from "./Header.js";
 import type { ChatMessage } from "./ChatView.js";
 import { ChatViewport } from "./ChatViewport.js";
 import { PlanBanner } from "./PlanBanner.js";
@@ -46,6 +45,9 @@ interface PermissionRequest {
   trusted: boolean;
 }
 
+/** Shown once per run when input arrives while the agent is still streaming. */
+const BUSY_HINT = "运行中：输入已保留，完成或按 Ctrl+C 中断后再按 Enter 发送";
+
 const PERMISSION_STATUS: Record<PermissionScope, string> = {
   once: "已允许本次修改",
   session: "已允许本会话后续写入",
@@ -55,11 +57,9 @@ const PERMISSION_STATUS: Record<PermissionScope, string> = {
 export function App({
   model,
   repoPath,
-  version = "0.1.0",
 }: {
   model: string;
   repoPath: string;
-  version?: string;
 }) {
   const { exit } = useApp();
   const [screen, setScreen] = useState<Screen>("chat");
@@ -68,6 +68,7 @@ export function App({
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("就绪 · 输入 / 查看命令");
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
@@ -78,6 +79,7 @@ export function App({
   const [elapsed, setElapsed] = useState(0);
   const [draft, setDraft] = useState<ChatMessage | null>(null);
   const busyStart = useRef<number | null>(null);
+  const busyHint = useRef(false);
   const bridge = useRef<AgentBridge | null>(null);
   const screenRef = useRef<Screen>("chat");
   const nextId = useRef(0);
@@ -89,8 +91,6 @@ export function App({
     thinking: "",
     steps: [],
   });
-  const headerItems = useRef([`${repoPath}\0${model}`]).current;
-
   const append = useCallback((role: ChatMessage["role"], text: string) => {
     const id = nextId.current++;
     setMessages((previous) => [...previous, { id, role, text }]);
@@ -125,6 +125,7 @@ export function App({
       setBusy(false);
       setStatus(nextStatus);
       busyStart.current = null;
+      busyHint.current = false;
       return duration;
     },
     [],
@@ -199,6 +200,12 @@ export function App({
         const active = data.mode === "plan";
         setPlanMode(active);
         setStatus(active ? "PLAN · 只读分析模式" : "已退出计划模式");
+        append(
+          "system",
+          active
+            ? "已进入计划模式：只读分析，写工具不可用"
+            : "已退出计划模式：可以继续修改文件",
+        );
         return;
       }
       if (name === "/fork") {
@@ -288,6 +295,7 @@ export function App({
         case "chat_done":
           {
             const text = message.text || stream.current;
+            setFailed(false);
             const duration = finishBusy();
             commitTrace();
             if (text) commit("assistant", text, { duration });
@@ -318,6 +326,7 @@ export function App({
           break;
         case "report":
           {
+            setFailed(false);
             const duration = finishBusy();
             commitTrace();
             commit("assistant", message.markdown, { duration });
@@ -327,6 +336,7 @@ export function App({
           break;
         case "error":
           {
+            setFailed(true);
             const duration = finishBusy("出错");
             commitTrace();
             commit("system", message.message, { duration });
@@ -348,7 +358,7 @@ export function App({
           setStatus(message.detail || message.phase);
           break;
         case "session":
-          setStatus(`会话 ${String(message.data.session ?? "main")}`);
+          setStatus(sessionStatus(message.data));
           break;
         case "tool_call":
           setStatus(`${message.name}(${formatArgs(message.args)})`);
@@ -398,7 +408,16 @@ export function App({
   const submit = useCallback(
     (value: string) => {
       const text = value.trim();
-      if (!text || busy) return;
+      if (!text) return;
+      if (busy) {
+        // Never drop input silently: keep the draft and explain once per run.
+        if (!busyHint.current) {
+          busyHint.current = true;
+          append("system", BUSY_HINT);
+        }
+        return;
+      }
+      setFailed(false);
       setDraft(null);
       stream.current = "";
       assistantId.current = null;
@@ -582,18 +601,6 @@ export function App({
 
   return (
     <Box flexDirection="column">
-      <Static items={headerItems}>
-        {() => (
-          <Header
-            key="header"
-            taskTitle="Exhibit Chat"
-            repoPath={repoPath}
-            model={activeModel}
-            version={version}
-          />
-        )}
-      </Static>
-      <Box height={1} />
       <PlanBanner active={planMode} />
       {screen === "login" || screen === "login-busy" ? (
         <LoginDialog
@@ -642,6 +649,7 @@ export function App({
           elapsed={elapsed}
           traceExpanded={traceExpanded}
           liveTrace={liveTrace}
+          failed={failed}
         />
       )}
       {screen !== "chat" ? <Text color={theme.muted}>Esc 返回 · Ctrl+C 取消</Text> : null}
@@ -711,6 +719,23 @@ function formatList(value: unknown, prefix = ""): string {
     : [];
   if (items.length === 0) return prefix ? `${prefix}无` : "无";
   return prefix ? `${prefix}${items.join(", ")}` : items.join(", ");
+}
+
+/**
+ * Status-bar text for a session event.
+ *
+ * Carries the mode plus the provider and model the agent will really call, so
+ * the bar never has to guess from environment defaults.
+ */
+export function sessionStatus(data: Record<string, unknown>): string {
+  const parts = [String(data.session ?? "main")];
+  if (String(data.mode ?? "") === "plan") parts.push("plan");
+  const provider = String(data.provider ?? "");
+  const model = String(data.model ?? "");
+  if (provider || model) {
+    parts.push([provider, model].filter(Boolean).join(" · "));
+  }
+  return `会话 ${parts.join(" · ")}`;
 }
 
 function formatStatus(data: Record<string, unknown>): string {

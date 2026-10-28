@@ -29,17 +29,11 @@ class GitReviewScope:
 def _run_git(args: list[str], repo_path: str) -> str:
     """Run a git command and return its stdout, or an error message."""
     requested = Path(repo_path).resolve()
-    repo = requested
     configured = os.getenv("EXHIBIT_REPO_ROOT")
-    sandbox = Path(configured).resolve() if configured else None
-    if sandbox is not None and requested != sandbox:
-        try:
-            requested.relative_to(sandbox)
-            repo = sandbox
-        except ValueError:
-            # The model may repeat a caller path relative to the process cwd.
-            if (Path.cwd() / repo_path).resolve() == sandbox:
-                repo = sandbox
+    # Git tools always act on the repository under review. A model path may be
+    # relative to the process cwd, so anything that does not resolve to that
+    # root would otherwise inspect the wrong repository.
+    repo = Path(configured).resolve() if configured else requested
     if not repo.exists():
         return f"错误：仓库路径不存在 {repo_path}"
     try:

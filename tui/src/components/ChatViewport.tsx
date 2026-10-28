@@ -59,6 +59,7 @@ export function ChatViewport({
   elapsed = 0,
   traceExpanded = false,
   liveTrace = [],
+  failed = false,
 }: {
   messages: ChatMessage[];
   draft?: ChatMessage | null;
@@ -70,6 +71,7 @@ export function ChatViewport({
   elapsed?: number;
   traceExpanded?: boolean;
   liveTrace?: TraceStep[];
+  failed?: boolean;
 }) {
   const suggestions = suggestionsFor(input, planMode);
   const { start, end } = windowAround(selected, suggestions.length, PALETTE_HEIGHT);
@@ -199,9 +201,13 @@ export function ChatViewport({
           </Text>
         )}
       </Box>
-      <Box borderStyle="round" borderColor={theme.border} paddingX={1}>
-        <Text color={busy ? theme.accent : theme.muted}>
-          {busy ? "◐" : "✓"}
+      <Box
+        borderStyle="round"
+        borderColor={failed ? theme.danger : theme.border}
+        paddingX={1}
+      >
+        <Text color={failed ? theme.danger : busy ? theme.accent : theme.muted}>
+          {failed ? "✗" : busy ? "◐" : "✓"}
         </Text>
         <Text color={theme.text}> {status}</Text>
         <Box flexGrow={1} />

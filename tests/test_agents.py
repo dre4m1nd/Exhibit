@@ -165,6 +165,10 @@ def test_session_config_honours_env_provider(monkeypatch, tmp_path) -> None:
     assert config is not None
     assert config.base_url == "http://127.0.0.1:3425/v1"
     assert store.active.provider == "custom"
+    # The chat loop resolves this before the first status event, so /status
+    # never reports a null provider/model.
+    assert store.status()["provider"] == "custom"
+    assert store.status()["model"] == "group/master"
 
 
 def test_login_hint_points_at_provider_when_several_are_saved(monkeypatch) -> None:
