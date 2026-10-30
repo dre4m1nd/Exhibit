@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { displayWidth } from "../chatLines.js";
 import { buildBanner } from "./Header.js";
 
 describe("buildBanner", () => {
@@ -16,6 +17,11 @@ describe("buildBanner", () => {
       expect(line.startsWith("│")).toBe(true);
       expect(line.endsWith("│")).toBe(true);
     }
+  });
+
+  it("keeps every row the same cell width so the frame stays straight", () => {
+    const widths = new Set(lines.map(displayWidth));
+    expect([...widths]).toHaveLength(1);
   });
 
   it("embeds the version in the title row", () => {

@@ -12,6 +12,38 @@ React-Ink 渲染终端界面，两者通过 stdio 上的 JSON 行协议通信。
 | 会话分叉 | `/fork` 复制历史、模式和文件记录 |
 | 四类审查 | `/init`、`/review arch\|audit\|repo\|git`、`/diff` |
 
+## 界面一览
+
+以下截图全部来自真实终端会话（Windows ConPTY，112 列），目标是
+`med-ins` 这个 Spring Boot 医保结算仓库。
+
+![启动横幅](docs/screenshots/01-banner.png)
+
+| 命令面板：输入 `/` 立即列出命令与一行说明 | 会话状态：`/status` 显示会话、模式、供应商与模型 |
+| --- | --- |
+| ![命令面板](docs/screenshots/02-command-palette.png) | ![会话状态](docs/screenshots/03-status.png) |
+| **供应商**：`/provider` 列出各供应商的登录状态 | **模型选择**：`/model` 实时拉取目录并标出当前模型 |
+| ![供应商](docs/screenshots/04-provider.png) | ![模型选择](docs/screenshots/05-model-picker.png) |
+| **登录**：`/login` 选供应商，Key 掩码输入 | **计划模式**：`/plan` 只读分析，输入框与横幅同时提示 |
+| ![登录](docs/screenshots/06-login.png) | ![计划模式](docs/screenshots/07-plan-mode.png) |
+
+**常驻聊天**：流式回复 + 折叠的运行轨迹（思考步数、工具次数，`Ctrl+T` 展开）
+
+![常驻聊天](docs/screenshots/08-chat.png)
+
+**写入确认**：所有修改先生成预览，按 `y` 允许一次、`s` 本会话允许、`n` 拒绝
+
+![写入确认](docs/screenshots/10-permission.png)
+
+**审查报告**：报告直接进入聊天流，中文分级并标注 `文件:行号`
+
+![Git 变更审查](docs/screenshots/09-diff-report.png)
+
+整仓/架构审查会给出更长的分级报告；当报告触到输出上限时，末尾会直接提示调大
+`EXHIBIT_MAX_OUTPUT_TOKENS`：
+
+![架构审查](docs/screenshots/11-arch-report.png)
+
 ## 快速开始
 
 ```powershell

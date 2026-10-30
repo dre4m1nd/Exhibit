@@ -1,4 +1,5 @@
 import React from "react";
+import { displayWidth } from "../chatLines.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../commands.js";
 
 interface HeaderProps {
@@ -48,22 +49,35 @@ export function buildBanner(args: {
     (name) => SLASH_COMMANDS.find((command) => command.name === name),
   ).filter((command): command is SlashCommand => command !== undefined);
 
+  // Widths are measured in terminal cells, not code points: a CJK glyph takes
+  // two columns, so padding by string length leaves the frame ragged.
   const leftWidth = Math.max(
-    ...logo.map((line) => line.length),
-    ...welcome.map((line) => line.length),
+    ...logo.map(displayWidth),
+    ...welcome.map(displayWidth),
   );
   const rightWidth = Math.max(
-    ...commandRows.map((command) => command.name.length + 2 + command.description.length),
-    ...CAPABILITIES.map((line) => line.length),
+    ...commandRows.map(
+      (command) => displayWidth(command.name) + 2 + displayWidth(command.description),
+    ),
+    ...CAPABILITIES.map(displayWidth),
   );
   const innerWidth = leftWidth + 3 + rightWidth;
   const title = ` Exhibit v${version} `;
 
-  const renderRow = (left: string, right: string): string => {
-    const leftPadded = (left + " ".repeat(leftWidth)).slice(0, leftWidth);
-    const rightPadded = (right + " ".repeat(rightWidth)).slice(0, rightWidth);
-    return `│ ${leftPadded}  ${rightPadded} │`;
+  const fit = (text: string, width: number): string => {
+    let out = "";
+    let used = 0;
+    for (const char of text) {
+      const cells = displayWidth(char);
+      if (used + cells > width) break;
+      out += char;
+      used += cells;
+    }
+    return out + " ".repeat(Math.max(0, width - used));
   };
+
+  const renderRow = (left: string, right: string): string =>
+    `│ ${fit(left, leftWidth)}  ${fit(right, rightWidth)} │`;
 
   const rows = Math.max(logo.length, welcome.length);
   const body: string[] = [];
@@ -74,16 +88,17 @@ export function buildBanner(args: {
   }
   body.push(renderRow("", "  命令"));
   commandRows.forEach((command) => {
-    const right = `${command.name}  ${command.description}`.slice(0, rightWidth);
-    body.push(renderRow("", right));
+    body.push(renderRow("", `${command.name}  ${command.description}`));
   });
-  body.push(`│${" ".repeat(leftWidth)}  ${"─".repeat(rightWidth)}│`);
+  body.push(`│ ${" ".repeat(leftWidth)}  ${"─".repeat(rightWidth)} │`);
   body.push(renderRow("", "  Capabilities"));
   CAPABILITIES.forEach((line) => {
-    body.push(renderRow("", `  ${line}`.slice(0, rightWidth)));
+    body.push(renderRow("", `  ${line}`));
   });
 
-  const titleRow = `╭${title}${"─".repeat(innerWidth - title.length + 2)}╮`;
-  const bottom = `╰${"─".repeat(innerWidth + 2)}╯`;
+  // Every row must be the same number of cells wide: the frame is one cell of
+  // padding on each side plus the two content columns.
+  const titleRow = `╭${title}${"─".repeat(innerWidth + 1 - displayWidth(title))}╮`;
+  const bottom = `╰${"─".repeat(innerWidth + 1)}╯`;
   return [titleRow, ...body, bottom];
 }
