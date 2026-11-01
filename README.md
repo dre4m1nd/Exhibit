@@ -11,6 +11,7 @@ React-Ink 渲染终端界面，两者通过 stdio 上的 JSON 行协议通信。
 | 计划模式 | `/plan` 只读分析；不注册写工具 |
 | 会话分叉 | `/fork` 复制历史、模式和文件记录 |
 | 四类审查 | `/init`、`/review arch\|audit\|repo\|git`、`/diff` |
+| 自适应宽度 | 长路径、长模型 ID、长端点按终端列数截断（带「…」），窄终端不断框 |
 
 ## 界面一览
 
@@ -42,6 +43,13 @@ React-Ink 渲染终端界面，两者通过 stdio 上的 JSON 行协议通信。
 整仓/架构审查会给出更长的分级报告（阅读路径按 `文件:行号` 落到具体实现）：
 
 ![架构审查](docs/screenshots/11-arch-report.png)
+
+**窄终端**（72 列）：横幅、命令面板、模型选择器都按列数收敛，长内容以「…」截断而
+不换行，边框与列对齐保持完整。
+
+| 72 列横幅：长路径截断为 `D:\dev-...\…` | 72 列模型选择器：长 ID 不换行，页脚显示 `28/121` |
+| --- | --- |
+| ![72 列横幅](docs/screenshots/12-narrow-banner.png) | ![72 列模型选择器](docs/screenshots/13-narrow-models.png) |
 
 ## 快速开始
 
@@ -87,6 +95,10 @@ HTTPS 远程地址，其他 localhost 与私网地址也继续拒绝。
 OpenRouter 默认使用 `openrouter/free` 免费路由，端点固定为
 `https://openrouter.ai/api/v1`。若免费模型暂时限流或不可用，界面会显示明确错误，
 不会留下空白回答。
+
+底部状态栏始终显示当前真正生效的 `会话 · 模式 · 供应商 · 模型`（例如
+`会话 main · plan · custom · group/master`）；`/status` 输出同样的字段，所以不
+用猜当前在调用哪个模型。
 
 ```text
 /login       配置模型供应商与 API Key
