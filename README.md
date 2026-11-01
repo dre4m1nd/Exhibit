@@ -39,8 +39,7 @@ React-Ink 渲染终端界面，两者通过 stdio 上的 JSON 行协议通信。
 
 ![Git 变更审查](docs/screenshots/09-diff-report.png)
 
-整仓/架构审查会给出更长的分级报告；当报告触到输出上限时，末尾会直接提示调大
-`EXHIBIT_MAX_OUTPUT_TOKENS`：
+整仓/架构审查会给出更长的分级报告（阅读路径按 `文件:行号` 落到具体实现）：
 
 ![架构审查](docs/screenshots/11-arch-report.png)
 

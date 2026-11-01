@@ -10,6 +10,7 @@ import { render } from "ink";
 import { App } from "./components/App.js";
 import { buildBanner } from "./components/Header.js";
 import { parseCliArgs, USAGE } from "./cli.js";
+import { theme } from "./theme.js";
 
 /**
  * Rebuild when launched through the globally linked `exhibit` command.
@@ -51,6 +52,14 @@ export function ensureFreshBuild(): void {
 
 const model = process.env.EXHIBIT_MODEL ?? "gpt-5.4-mini";
 
+/** Wrap text in a 24-bit ANSI foreground colour from a `#RRGGBB` token. */
+function paint(hex: string, text: string): string {
+  const [red, green, blue] = [1, 3, 5].map((offset) =>
+    Number.parseInt(hex.slice(offset, offset + 2), 16),
+  );
+  return `\u001b[38;2;${red};${green};${blue}m${text}\u001b[0m`;
+}
+
 /** Read the TUI version from package.json without importing outside rootDir. */
 function readVersion(): string {
   try {
@@ -85,12 +94,16 @@ if (options?.help) {
     }
     // Ink only prints the first <Static> block in a tree, so the banner is
     // written into scrollback once here and the chat log keeps the only Static.
+    // It is painted as chrome: muted frame, accent title, so the conversation
+    // stays the brightest thing on screen.
     process.stdout.write(
       buildBanner({
         taskTitle: "Exhibit Chat",
         repoPath: options.repoPath,
         version,
-      }).join("\n") + "\n",
+      })
+        .map((line, index) => paint(index === 0 ? theme.accent : theme.muted, line))
+        .join("\n") + "\n",
     );
     render(<App model={model} repoPath={options.repoPath} />, {
       exitOnCtrlC: false,

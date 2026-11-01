@@ -99,7 +99,7 @@ export function ModelDialog({
             return (
               <Text key={`provider-${row.provider}`} color={theme.info} bold>
                 {row.label} · {source}
-                {row.error ? <Text color={theme.danger}> · {row.error}</Text> : null}
+                {row.error ? <Text color={theme.dangerText}> · {row.error}</Text> : null}
               </Text>
             );
           }
@@ -141,7 +141,7 @@ export function ModelDialog({
         <Text color={theme.muted}>↑↓ 选择 · Enter 应用 · Esc 取消</Text>
       )}
       {busy ? <Text color={theme.accent}>正在切换模型…</Text> : null}
-      {error ? <Text color={theme.danger}>{error} · r 重新发现</Text> : null}
+      {error ? <Text color={theme.dangerText}>{error} · r 重新发现</Text> : null}
     </Box>
   );
 }

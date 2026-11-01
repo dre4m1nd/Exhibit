@@ -36,7 +36,7 @@ const TONE_COLOR: Record<LineTone, string> = {
   muted: theme.muted,
   info: theme.info,
   ok: theme.ok,
-  danger: theme.danger,
+  danger: theme.dangerText,
   warn: theme.warn,
   border: theme.border,
 };

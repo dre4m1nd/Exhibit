@@ -1,18 +1,23 @@
-/** The visual language of Exhibit: dark, warm-amber accents, high contrast. */
+/**
+ * The visual language of Exhibit: an amber-phosphor terminal on warm charcoal.
+ *
+ * Every value here is a contrast-checked token — the APCA gate (Lc 75 body /
+ * 30 non-text on `ink`) has to pass before a colour ships, so no component
+ * introduces an off-system hex. `danger` is the mark/border red; `dangerText`
+ * is the lighter red that stays legible as small text on `ink`.
+ */
 
 export const theme = {
-  accent: "#F2B705",
-  accentDim: "#8C6A0B",
+  accent: "#FFC21A",
   ink: "#0D0B08",
-  panel: "#171310",
-  panelSoft: "#221C17",
   text: "#F4EDE3",
-  muted: "#9A8F80",
+  muted: "#D9CFBF",
   danger: "#FF6B4A",
-  warn: "#F2B705",
-  ok: "#7ED08A",
-  info: "#6FC3D8",
-  border: "#3A302A",
+  dangerText: "#FFC2B3",
+  warn: "#FFC21A",
+  ok: "#A6E8B0",
+  info: "#9BDDEE",
+  border: "#8A7A6A",
 } as const;
 
 export const SYMBOLS = {

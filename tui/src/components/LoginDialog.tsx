@@ -142,7 +142,7 @@ export function LoginDialog({
               ? `输入 ${field === "key" ? "API Key" : field === "baseUrl" ? "Base URL" : "Model"} · Enter 继续 · Esc 后退`
               : "Enter 登录 · Esc 后退"}
       </Text>
-      {error ? <Text color={theme.danger}>{error}</Text> : null}
+      {error ? <Text color={theme.dangerText}>{error}</Text> : null}
     </Box>
   );
 }
