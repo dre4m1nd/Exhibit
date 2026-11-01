@@ -15,18 +15,14 @@ React-Ink 渲染终端界面，两者通过 stdio 上的 JSON 行协议通信。
 
 ## 界面一览
 
-以下截图全部来自真实终端会话（Windows ConPTY，112 列），目标是
-`med-ins` 这个 Spring Boot 医保结算仓库。
+以下截图来自真实终端会话（Windows ConPTY，112 列），目标是 `med-ins` 这个
+Spring Boot 医保结算仓库。
 
 ![启动横幅](docs/screenshots/01-banner.png)
 
-| 命令面板：输入 `/` 立即列出命令与一行说明 | 会话状态：`/status` 显示会话、模式、供应商与模型 |
-| --- | --- |
-| ![命令面板](docs/screenshots/02-command-palette.png) | ![会话状态](docs/screenshots/03-status.png) |
-| **供应商**：`/provider` 列出各供应商的登录状态 | **模型选择**：`/model` 实时拉取目录并标出当前模型 |
-| ![供应商](docs/screenshots/04-provider.png) | ![模型选择](docs/screenshots/05-model-picker.png) |
-| **登录**：`/login` 选供应商，Key 掩码输入 | **计划模式**：`/plan` 只读分析，输入框与横幅同时提示 |
-| ![登录](docs/screenshots/06-login.png) | ![计划模式](docs/screenshots/07-plan-mode.png) |
+底部状态栏始终显示真正生效的 `会话 · 模式 · 供应商 · 模型`（`/status` 输出同样字段）：
+
+![会话状态](docs/screenshots/03-status.png)
 
 **常驻聊天**：流式回复 + 折叠的运行轨迹（思考步数、工具次数，`Ctrl+T` 展开）
 
@@ -36,20 +32,13 @@ React-Ink 渲染终端界面，两者通过 stdio 上的 JSON 行协议通信。
 
 ![写入确认](docs/screenshots/10-permission.png)
 
-**审查报告**：报告直接进入聊天流，中文分级并标注 `文件:行号`
-
-![Git 变更审查](docs/screenshots/09-diff-report.png)
-
-整仓/架构审查会给出更长的分级报告（阅读路径按 `文件:行号` 落到具体实现）：
+**审查报告**：直接进入聊天流，中文分级，阅读路径按 `文件:行号` 落到具体实现
 
 ![架构审查](docs/screenshots/11-arch-report.png)
 
-**窄终端**（72 列）：横幅、命令面板、模型选择器都按列数收敛，长内容以「…」截断而
-不换行，边框与列对齐保持完整。
+**窄终端**（72 列）：长模型 ID 不换行，页脚显示 `28/121`，边框与列对齐保持完整
 
-| 72 列横幅：长路径截断为 `D:\dev-...\…` | 72 列模型选择器：长 ID 不换行，页脚显示 `28/121` |
-| --- | --- |
-| ![72 列横幅](docs/screenshots/12-narrow-banner.png) | ![72 列模型选择器](docs/screenshots/13-narrow-models.png) |
+![72 列模型选择器](docs/screenshots/13-narrow-models.png)
 
 ## 快速开始
 
