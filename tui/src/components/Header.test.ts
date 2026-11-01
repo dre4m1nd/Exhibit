@@ -34,6 +34,19 @@ describe("buildBanner", () => {
     expect(text).toContain("D:\\Code\\Exhibit");
   });
 
+  it("never renders wider than the terminal and clips with an ellipsis", () => {
+    const longPath = "D:\work\\" + "deep-monorepo\\".repeat(6) + "app";
+    const capped = buildBanner({
+      taskTitle: "Exhibit Chat",
+      repoPath: longPath,
+      version: "0.1.0",
+      columns: 100,
+    });
+    expect(Math.max(...capped.map(displayWidth))).toBeLessThanOrEqual(100);
+    expect(new Set(capped.map(displayWidth)).size).toBe(1);
+    expect(capped.join("\n")).toContain("…");
+  });
+
   it("lists the quick commands and a capabilities block", () => {
     const text = lines.join("\n");
     expect(text).toContain("/login");

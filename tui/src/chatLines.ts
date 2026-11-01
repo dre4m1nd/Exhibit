@@ -2,11 +2,14 @@
 
 import { parseMarkdown } from "./components/Markdown.js";
 import type { ChatMessage } from "./components/ChatView.js";
+import { charWidth, displayWidth } from "./text.js";
 import {
   latestTraceActivity,
   summarizeTrace,
   type TraceStep,
 } from "./trace.js";
+
+export { charWidth, displayWidth } from "./text.js";
 
 export type LineTone =
   | "accent"
@@ -26,40 +29,6 @@ export interface DisplayLine {
   dim?: boolean;
 }
 
-/** Width of one code point in terminal cells (CJK and emoji count as two). */
-export function charWidth(char: string): number {
-  const code = char.codePointAt(0) ?? 0;
-  if (
-    code === 0 ||
-    code < 32 ||
-    (code >= 0x0300 && code <= 0x036f) ||
-    (code >= 0xfe00 && code <= 0xfe0f)
-  ) {
-    return 0;
-  }
-  if (
-    (code >= 0x1100 && code <= 0x115f) ||
-    code === 0x2329 ||
-    code === 0x232a ||
-    (code >= 0x2e80 && code <= 0xa4cf) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe30 && code <= 0xfe6f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1faff) ||
-    (code >= 0x20000 && code <= 0x3fffd)
-  ) {
-    return 2;
-  }
-  return 1;
-}
-
-export function displayWidth(text: string): number {
-  let width = 0;
-  for (const char of text) width += charWidth(char);
-  return width;
-}
 
 /** Hard-wrap text by terminal cell width, preferring the last space. */
 export function wrapText(text: string, width: number): string[] {

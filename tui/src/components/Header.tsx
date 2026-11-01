@@ -1,5 +1,5 @@
 import React from "react";
-import { displayWidth } from "../chatLines.js";
+import { displayWidth, padTo } from "../text.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../commands.js";
 
 interface HeaderProps {
@@ -34,8 +34,10 @@ export function buildBanner(args: {
   taskTitle: string;
   repoPath: string;
   version: string;
+  /** Terminal width in cells; the banner never renders wider than this. */
+  columns?: number;
 }): string[] {
-  const { taskTitle, repoPath, version } = args;
+  const { taskTitle, repoPath, version, columns = 0 } = args;
   const logo = LOGO;
   // The model is deliberately absent: chat mode resolves it from the saved
   // credential, so the always-visible status bar is the only truthful place.
@@ -61,36 +63,39 @@ export function buildBanner(args: {
     ),
     ...CAPABILITIES.map(displayWidth),
   );
-  const innerWidth = leftWidth + 3 + rightWidth;
+  // The frame costs six cells (`│ ` + `  ` + ` │`). When the terminal is
+  // narrower than the natural banner, shrink the right column and let it clip
+  // with an ellipsis instead of wrapping and breaking the frame.
+  const frame = 6;
+  const budget = columns > 0 ? Math.max(frame + 12, columns - 1) : leftWidth + rightWidth + frame;
+  const rightMin = 12;
+  let left = leftWidth;
+  let right = rightWidth;
+  // Shrink the right column first, then the left; anything that still does not
+  // fit is clipped with an ellipsis rather than wrapped.
+  const overflow = Math.max(0, left + right + frame - budget);
+  const rightCut = Math.min(overflow, right - rightMin);
+  right -= rightCut;
+  left = Math.max(rightMin, left - (overflow - rightCut));
+
   const title = ` Exhibit v${version} `;
+  const innerWidth = left + 3 + right;
 
-  const fit = (text: string, width: number): string => {
-    let out = "";
-    let used = 0;
-    for (const char of text) {
-      const cells = displayWidth(char);
-      if (used + cells > width) break;
-      out += char;
-      used += cells;
-    }
-    return out + " ".repeat(Math.max(0, width - used));
-  };
-
-  const renderRow = (left: string, right: string): string =>
-    `│ ${fit(left, leftWidth)}  ${fit(right, rightWidth)} │`;
+  const renderRow = (leftText: string, rightText: string): string =>
+    `│ ${padTo(leftText, left)}  ${padTo(rightText, right)} │`;
 
   const rows = Math.max(logo.length, welcome.length);
   const body: string[] = [];
   for (let index = 0; index < rows; index += 1) {
-    const left = logo[index] ?? " ".repeat(leftWidth);
-    const right = welcome[index] ?? "";
-    body.push(renderRow(left, right));
+    const logoLine = logo[index] ?? "";
+    const welcomeLine = welcome[index] ?? "";
+    body.push(renderRow(logoLine, welcomeLine));
   }
   body.push(renderRow("", "  命令"));
   commandRows.forEach((command) => {
     body.push(renderRow("", `${command.name}  ${command.description}`));
   });
-  body.push(`│ ${" ".repeat(leftWidth)}  ${"─".repeat(rightWidth)} │`);
+  body.push(`│ ${" ".repeat(left)}  ${"─".repeat(right)} │`);
   body.push(renderRow("", "  Capabilities"));
   CAPABILITIES.forEach((line) => {
     body.push(renderRow("", `  ${line}`));

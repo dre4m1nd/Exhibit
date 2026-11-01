@@ -1,6 +1,8 @@
-import React, { useState } from "react";
+import React from "react";
 import { Box, Static, Text } from "ink";
+import { padTo, truncate } from "../text.js";
 import { theme } from "../theme.js";
+import { useTerminalSize } from "../useTerminalSize.js";
 import type { ChatMessage } from "./ChatView.js";
 import {
   buildChatLines,
@@ -41,13 +43,6 @@ const TONE_COLOR: Record<LineTone, string> = {
   border: theme.border,
 };
 
-function terminalSize(): { rows: number; columns: number } {
-  return {
-    rows: process.stdout.rows || 24,
-    columns: process.stdout.columns || 80,
-  };
-}
-
 export function ChatViewport({
   messages,
   draft,
@@ -77,14 +72,7 @@ export function ChatViewport({
   const { start, end } = windowAround(selected, suggestions.length, PALETTE_HEIGHT);
   const shown = suggestions.slice(start, end);
   const choosingReview = suggestions.some((item) => item.kind === "review");
-  const [size, setSize] = useState(terminalSize);
-  React.useEffect(() => {
-    const onResize = () => setSize(terminalSize());
-    process.stdout.on("resize", onResize);
-    return () => {
-      process.stdout.off("resize", onResize);
-    };
-  }, []);
+  const size = useTerminalSize();
 
   const contentWidth = Math.max(20, size.columns - 2);
   const paletteRows = shown.length === 0 ? 0 : shown.length + 1;
@@ -156,8 +144,8 @@ export function ChatViewport({
                 <Text color={active ? theme.accent : theme.muted}>
                   {active ? "❯ " : "  "}
                 </Text>
-                <Text color={theme.accent}>{suggestion.label.padEnd(12)}</Text>
-                {suggestion.description}
+                <Text color={theme.accent}>{padTo(suggestion.label, 11)} </Text>
+                {truncate(suggestion.description, contentWidth - 15)}
               </Text>
             );
           })}

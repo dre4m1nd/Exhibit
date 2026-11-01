@@ -8,6 +8,8 @@ import {
   windowAround,
   type ModelCatalog,
 } from "../models.js";
+import { displayWidth, truncate, truncateLeft } from "../text.js";
+import { useTerminalSize } from "../useTerminalSize.js";
 
 const VISIBLE_ROWS = 10;
 
@@ -32,6 +34,9 @@ export function ModelDialog({
   const [manualModel, setManualModel] = useState("");
   const { start, end } = windowAround(selected, rows.length, VISIBLE_ROWS);
   const shown = rows.slice(start, end);
+  // Double border + paddingX={2} costs 6 cells; keep 2 more as a margin so the
+  // right border never lands on the terminal's last column and wraps.
+  const width = Math.max(24, useTerminalSize().columns - 8);
 
   useInput((value, key) => {
     if (busy) return;
@@ -96,10 +101,19 @@ export function ModelDialog({
           const active = index === selected && !busy;
           if (row.kind === "provider") {
             const source = row.source === "live" ? "实时" : "回退";
+            const heading = `${row.label} · ${source}`;
             return (
               <Text key={`provider-${row.provider}`} color={theme.info} bold>
-                {row.label} · {source}
-                {row.error ? <Text color={theme.dangerText}> · {row.error}</Text> : null}
+                {heading}
+                {row.error ? (
+                  <Text color={theme.dangerText}>
+                    {" "}
+                    {truncate(
+                      `· ${row.error}`,
+                      Math.max(8, width - displayWidth(heading) - 1),
+                    )}
+                  </Text>
+                ) : null}
               </Text>
             );
           }
@@ -113,14 +127,18 @@ export function ModelDialog({
               </Text>
             );
           }
+          // Model ids can be long; clip them so every row keeps the same
+          // marker column and the box edge stays intact.
+          const marker = `${active ? "❯ " : "  "}${row.current ? "●" : "○"} `;
+          const suffix = row.current ? " · 当前" : "";
           return (
             <Text
               key={`${row.provider}-${row.model}`}
               color={active ? theme.accent : theme.text}
             >
-              {active ? "❯ " : "  "}
-              {row.current ? "●" : "○"} {row.model}
-              {row.current ? <Text color={theme.muted}> · 当前</Text> : null}
+              {marker}
+              {truncate(row.model, width - marker.length - suffix.length)}
+              {row.current ? <Text color={theme.muted}>{suffix}</Text> : null}
             </Text>
           );
         })
@@ -138,10 +156,18 @@ export function ModelDialog({
           <Text color={theme.muted}>输入准确模型 ID · Enter 应用 · Esc 返回列表</Text>
         </Box>
       ) : (
-        <Text color={theme.muted}>↑↓ 选择 · Enter 应用 · Esc 取消</Text>
+        <Text color={theme.muted}>
+          {rows.length > VISIBLE_ROWS
+            ? `↑↓ 选择 · ${selected + 1}/${rows.length} · Enter 应用 · Esc 取消`
+            : "↑↓ 选择 · Enter 应用 · Esc 取消"}
+        </Text>
       )}
       {busy ? <Text color={theme.accent}>正在切换模型…</Text> : null}
-      {error ? <Text color={theme.dangerText}>{error} · r 重新发现</Text> : null}
+      {error ? (
+        <Text color={theme.dangerText}>
+          {truncate(error, Math.max(8, width - 12))} · r 重新发现
+        </Text>
+      ) : null}
     </Box>
   );
 }

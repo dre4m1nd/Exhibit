@@ -438,7 +438,7 @@ export function App({
       if (text === "/model") {
         append("user", text);
         setBusy(true);
-        setStatus("发现模型目录");
+        setStatus("正在发现模型…");
         bridge.current?.sendCommand("/model");
         return;
       }
@@ -465,7 +465,7 @@ export function App({
       }
       append("user", text);
       setBusy(true);
-      setStatus("模型推理中");
+      setStatus("模型推理中…");
       bridge.current?.sendChat(text);
     },
     [append, busy],
@@ -560,7 +560,7 @@ export function App({
     setModelCatalog(null);
     setScreen("chat");
     setBusy(true);
-    setStatus("发现模型目录");
+    setStatus("正在发现模型…");
     bridge.current?.sendCommand("/model");
   };
 

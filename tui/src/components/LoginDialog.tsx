@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { theme } from "../theme.js";
+import { truncateLeft } from "../text.js";
+import { useTerminalSize } from "../useTerminalSize.js";
 
 export interface LoginRequest {
   provider: string;
@@ -100,6 +102,10 @@ export function LoginDialog({
     if (input && !key.ctrl && !key.meta) setFieldValue(field, fieldValue(field) + input);
   });
 
+  // Double border plus horizontal padding; values clip from the left so the
+  // caret stays visible while typing a long endpoint or model id.
+  const width = Math.max(20, useTerminalSize().columns - 10);
+
   return (
     <Box flexDirection="column" borderStyle="double" borderColor={theme.accent} paddingX={2}>
       <Text color={theme.accent} bold>
@@ -119,13 +125,13 @@ export function LoginDialog({
       <Box height={1} />
       {field === "baseUrl" ? (
         <Text color={theme.text}>
-          Base URL: <Text color={theme.accent}>{baseUrl}</Text>
+          Base URL: <Text color={theme.accent}>{truncateLeft(baseUrl, width - 11)}</Text>
           <Text color={theme.accent}>▌</Text>
         </Text>
       ) : null}
       {field === "model" ? (
         <Text color={theme.text}>
-          Model: <Text color={theme.accent}>{model}</Text>
+          Model: <Text color={theme.accent}>{truncateLeft(model, width - 8)}</Text>
           <Text color={theme.accent}>▌</Text>
         </Text>
       ) : null}

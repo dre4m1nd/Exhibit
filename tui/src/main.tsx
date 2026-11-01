@@ -101,6 +101,7 @@ if (options?.help) {
         taskTitle: "Exhibit Chat",
         repoPath: options.repoPath,
         version,
+        columns: process.stdout.columns || 80,
       })
         .map((line, index) => paint(index === 0 ? theme.accent : theme.muted, line))
         .join("\n") + "\n",
