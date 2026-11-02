@@ -87,6 +87,11 @@ def get_user_prompt(task: str, params: dict[str, str]) -> str:
     )
 
 
+def get_evidence_prompt(repo_path: str = ".") -> str:
+    """Prompt for the read-only evidence pass of a two-phase run."""
+    return _render(_read_prompt("evidence.md"), {"repo_path": repo_path})
+
+
 def get_chat_prompt(*, mode: str = "agent", context: str = "") -> str:
     """Load the chat prompt for the active mode and append session context."""
     filename = "plan.md" if mode == "plan" else "chat.md"

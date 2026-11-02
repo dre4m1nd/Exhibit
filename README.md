@@ -111,6 +111,9 @@ OpenRouter 默认使用 `openrouter/free` 免费路由，端点固定为
 - `EXHIBIT_MAX_ITERS`：ReAct 循环上限，默认 40（也决定一次运行的成本上限；报告规则会要求模型预留轮次写报告）
 - `EXHIBIT_MAX_OUTPUT_TOKENS`：单次审查/报告的最大输出 token，默认 16000；报告被截断时调大
 - `EXHIBIT_PROMPT_DIR`：自定义提示词目录，默认 `agent/prompts/`
+- `EXHIBIT_EXPLORE_MODEL`：开启两阶段运行。先用这个（便宜的）模型做只读取证，
+  再由主模型仅依据证据清单写报告；探索阶段那几十万字符的上下文不会进入主模型的
+  计费。示例：`EXHIBIT_EXPLORE_MODEL=deepseek-flash`
 
 提示词全部位于 `agent/prompts/*.md`。`chat.md`、`file_edit.md`、`plan.md` 用于聊天；
 四类审查提示词由 `report_rules.md` 追加共享规则；`user_prompt.md` 支持

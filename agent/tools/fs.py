@@ -31,7 +31,7 @@ IGNORED_DIRS = {
 }
 
 MAX_FILE_BYTES = 256 * 1024
-MAX_TREE_ENTRIES = 120
+MAX_TREE_ENTRIES = 80
 MAX_READ_LINES = 400
 MAX_MATCHES = 200
 
@@ -143,13 +143,13 @@ def _looks_binary(path: Path) -> bool:
         return True
 
 
-def read_file(path: str, offset: int = 1, limit: int = 200) -> str:
+def read_file(path: str, offset: int = 1, limit: int = 120) -> str:
     """读取文本文件内容，自动跳过二进制文件并限制行数。
 
     Args:
         path: 仓库内的文件路径，相对仓库根目录或绝对路径。
         offset: 起始行号，从 1 开始。
-        limit: 最多返回的行数，上限 400。
+        limit: 最多返回的行数，默认 120，上限 400。
     """
     try:
         target = _resolve_inside(_repo_root(), path)

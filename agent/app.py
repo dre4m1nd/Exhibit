@@ -28,9 +28,12 @@ from agentscope.message import TextBlock
 from .agents import build_agent, build_chat_agent
 from .chat import handle_command
 from .config import Config, load_config, max_iters
+
+#: Evidence digests above this size defeat the point of the two-phase run.
+EVIDENCE_CHARS = 12_000
 from .credentials import load_credentials
 from .permissions import FileEditor
-from .prompt_loader import get_user_prompt
+from .prompt_loader import get_evidence_prompt, get_user_prompt
 from .protocol import (
     MSG_INIT,
     MSG_CHAT,
@@ -111,9 +114,12 @@ async def _stream_agent(
     task: str,
     params: dict,
     emitter: Emitter,
-) -> None:
-    """Run the agent and forward its events as protocol messages."""
-    user_prompt = get_user_prompt(task, params)
+    *,
+    preface: str = "",
+    emit_report: bool = True,
+) -> str:
+    """Run the agent, forward its events, and return the final text."""
+    user_prompt = preface + get_user_prompt(task, params)
     final_text: list[str] = []
     # tool_call_id -> [tool name, accumulated JSON argument fragment]
     calls: dict[str, list] = {}
@@ -169,11 +175,14 @@ async def _stream_agent(
         last_msg = agent._get_last_msg()  # noqa: SLF001
         if last_msg is not None:
             report = (last_msg.get_text_content() or "").strip()
+    if not emit_report:
+        return report
     if report:
         emitter.status("writing", "整理报告")
         emitter.report(report)
     else:
         emitter.error("模型没有产出报告内容，请调整参数后重试")
+    return report
 
 
 async def run(task: str, params: dict, emitter: Emitter) -> None:
@@ -191,8 +200,36 @@ async def run(task: str, params: dict, emitter: Emitter) -> None:
     config = load_config()
     model = params.get("model") or None
     emitter.status("scanning", f"任务：{task}")
-    agent = build_agent(task, config, model_name=model)
-    await _stream_agent(agent, task, params, emitter)
+    explore_model = os.getenv("EXHIBIT_EXPLORE_MODEL", "").strip()
+    if not explore_model:
+        agent = build_agent(task, config, model_name=model)
+        await _stream_agent(agent, task, params, emitter)
+        return
+
+    # Two phases: a cheap model pays for the exploration context, the main
+    # model only sees a capped digest, so the expensive context stays small.
+    emitter.status("explore", f"证据收集：{explore_model}")
+    reader = build_agent(
+        task,
+        config,
+        model_name=explore_model,
+        prompt_override=get_evidence_prompt(params.get("repo_path") or "."),
+    )
+    digest = await _stream_agent(reader, task, params, emitter, emit_report=False)
+    digest = digest[:EVIDENCE_CHARS]
+    emitter.status("writing", f"写报告：{config.model}")
+    writer = build_agent(task, config, model_name=model, tools=False)
+    await _stream_agent(
+        writer,
+        task,
+        params,
+        emitter,
+        preface=(
+            "以下是只读取证阶段收集的证据清单，请据此撰写最终报告；"
+            "证据未覆盖的部分写进「未能确认」。\n\n"
+            f"{digest or '（取证阶段没有产出内容）'}\n\n"
+        ),
+    )
 
 
 def _read_init(stream) -> dict:

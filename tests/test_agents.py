@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 
 import pytest
 
@@ -320,3 +321,78 @@ def test_chat_once_rejects_an_empty_provider_reply() -> None:
         asyncio.run(
             app_module._chat_once(agent, "你好", Emitter(io.StringIO()))
         )
+
+
+@pytest.fixture()
+def restore_repo_root():
+    """`run()` writes EXHIBIT_REPO_ROOT directly; do not leak it to other tests."""
+    previous = os.environ.get("EXHIBIT_REPO_ROOT")
+    yield
+    if previous is None:
+        os.environ.pop("EXHIBIT_REPO_ROOT", None)
+    else:
+        os.environ["EXHIBIT_REPO_ROOT"] = previous
+
+
+def test_two_phase_run_uses_the_explore_model_then_a_toolless_report(
+    monkeypatch: pytest.MonkeyPatch,
+    config: Config,
+    restore_repo_root,
+) -> None:
+    """EXHIBIT_EXPLORE_MODEL must split the run without breaking the report."""
+    monkeypatch.setenv("EXHIBIT_EXPLORE_MODEL", "auto/free")
+    monkeypatch.setattr(app_module, "load_config", lambda: config)
+    built: list[tuple[str | None, dict]] = []
+    streamed: list[dict] = []
+
+    def fake_build(task, config, model_name=None, **options):
+        built.append((model_name, options))
+        return object()
+
+    async def fake_stream(agent, task, params, emitter, **options):
+        streamed.append(options)
+        return "证据：pom.xml:1 是 Maven 聚合根" if options.get("emit_report") is False else "报告"
+
+    monkeypatch.setattr(app_module, "build_agent", fake_build)
+    monkeypatch.setattr(app_module, "_stream_agent", fake_stream)
+
+    asyncio.run(
+        app_module.run(
+            "arch_overview",
+            {"repo_path": "."},
+            Emitter(io.StringIO()),
+        )
+    )
+
+    assert built[0][0] == "auto/free"
+    assert "prompt_override" in built[0][1]
+    assert built[-1][0] is None
+    assert built[-1][1]["tools"] is False
+    assert streamed[0]["emit_report"] is False
+    assert "证据：pom.xml:1" in streamed[-1]["preface"]
+
+
+def test_single_phase_run_is_unchanged_without_the_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+    config: Config,
+    restore_repo_root,
+) -> None:
+    monkeypatch.delenv("EXHIBIT_EXPLORE_MODEL", raising=False)
+    monkeypatch.setattr(app_module, "load_config", lambda: config)
+    built: list[dict] = []
+    monkeypatch.setattr(
+        app_module,
+        "build_agent",
+        lambda task, config, model_name=None, **options: built.append(options) or object(),
+    )
+
+    async def fake_stream(agent, task, params, emitter, **options):
+        built.append(options)
+        return "报告"
+
+    monkeypatch.setattr(app_module, "_stream_agent", fake_stream)
+    asyncio.run(
+        app_module.run("arch_overview", {"repo_path": "."}, Emitter(io.StringIO()))
+    )
+
+    assert len(built) == 2  # one build + one stream, no evidence pass

@@ -43,6 +43,9 @@ def build_agent(
     task: str,
     config: Config,
     model_name: str | None = None,
+    *,
+    prompt_override: str | None = None,
+    tools: bool = True,
 ) -> Agent:
     """Create an Exhibit agent bound to the given task and model backend.
 
@@ -50,6 +53,8 @@ def build_agent(
         task: One of the task names in ``agent.protocol.TASKS``.
         config: The runtime configuration.
         model_name: Optional model override, defaults to ``config.model``.
+        prompt_override: System prompt to use instead of the task prompt.
+        tools: Set False for the report pass, which only reads evidence.
     """
     credential = OpenAICredential(
         api_key=config.api_key,
@@ -63,10 +68,10 @@ def build_agent(
             max_tokens=config.max_output_tokens,
         ),
     )
-    toolkit = Toolkit(tools=[*build_fs_tools(), *build_git_tools()])
+    toolkit = Toolkit(tools=[*build_fs_tools(), *build_git_tools()] if tools else [])
     return Agent(
         name="Exhibit",
-        system_prompt=get_system_prompt(task),
+        system_prompt=prompt_override or get_system_prompt(task),
         model=model,
         toolkit=toolkit,
         react_config=ReActConfig(max_iters=config.max_iters),
