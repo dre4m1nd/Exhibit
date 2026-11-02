@@ -27,7 +27,7 @@ from agentscope.message import TextBlock
 
 from .agents import build_agent, build_chat_agent
 from .chat import handle_command
-from .config import Config, load_config
+from .config import Config, load_config, max_iters
 from .credentials import load_credentials
 from .permissions import FileEditor
 from .prompt_loader import get_user_prompt
@@ -686,7 +686,7 @@ def _session_config(store: SessionStore) -> Config | None:
             base_url=session.base_url,
             api_key=session.api_key,
             model=session.model,
-            max_iters=60,
+            max_iters=max_iters(),
             request_timeout=600,
             max_output_tokens=16000,
         )
@@ -704,7 +704,7 @@ def _session_config(store: SessionStore) -> Config | None:
         base_url=credential.base_url,
         api_key=credential.api_key,
         model=credential.model,
-        max_iters=60,
+        max_iters=max_iters(),
         request_timeout=600,
         max_output_tokens=16000,
     )

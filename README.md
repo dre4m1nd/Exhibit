@@ -108,7 +108,7 @@ OpenRouter 默认使用 `openrouter/free` 免费路由，端点固定为
   自动选择 OpenRouter 端点与 `openrouter/free`
 - `EXHIBIT_MODEL`：默认 `gpt-5.4-mini`
 - `EXHIBIT_PROVIDER`：保存了多个供应商时，指定使用哪一个（无头与聊天模式均生效）
-- `EXHIBIT_MAX_ITERS`：ReAct 循环上限，默认 60
+- `EXHIBIT_MAX_ITERS`：ReAct 循环上限，默认 40（也决定一次运行的成本上限；报告规则会要求模型预留轮次写报告）
 - `EXHIBIT_MAX_OUTPUT_TOKENS`：单次审查/报告的最大输出 token，默认 16000；报告被截断时调大
 - `EXHIBIT_PROMPT_DIR`：自定义提示词目录，默认 `agent/prompts/`
 

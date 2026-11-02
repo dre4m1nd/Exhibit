@@ -13,6 +13,7 @@ from .providers import validate_base_url
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_MAX_ITERS = 40
 OPENROUTER_API_KEY = "OPENROUTER_API_KEY"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_MODEL = "openrouter/free"
@@ -28,6 +29,11 @@ class Config:
     max_iters: int
     request_timeout: float
     max_output_tokens: int = 16000
+
+
+def max_iters() -> int:
+    """ReAct budget; the lever that bounds how much one run costs."""
+    return int(os.getenv("EXHIBIT_MAX_ITERS", str(DEFAULT_MAX_ITERS)))
 
 
 def load_config() -> Config:
@@ -63,7 +69,7 @@ def load_config() -> Config:
             if openrouter_key and not exhibit_key
             else saved.model if saved is not None else DEFAULT_MODEL
         ),
-        max_iters=int(os.getenv("EXHIBIT_MAX_ITERS", "60")),
+        max_iters=max_iters(),
         request_timeout=float(os.getenv("EXHIBIT_TIMEOUT", "600")),
         max_output_tokens=int(os.getenv("EXHIBIT_MAX_OUTPUT_TOKENS", "16000")),
     )

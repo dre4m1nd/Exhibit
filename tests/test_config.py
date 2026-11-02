@@ -5,7 +5,12 @@ from __future__ import annotations
 
 import pytest
 
-from agent.config import DEFAULT_BASE_URL, DEFAULT_MODEL, load_config
+from agent.config import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MAX_ITERS,
+    DEFAULT_MODEL,
+    load_config,
+)
 from agent.credentials import CONFIG_ENV, save_credential
 
 
@@ -48,7 +53,7 @@ def test_defaults_use_remote_openai(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.base_url == DEFAULT_BASE_URL
     assert config.api_key == "test-key"
     assert config.model == DEFAULT_MODEL
-    assert config.max_iters == 60
+    assert config.max_iters == DEFAULT_MAX_ITERS
     assert config.request_timeout == 600
 
 
@@ -75,6 +80,17 @@ def test_exhibit_key_takes_precedence_over_openrouter_key(
     assert config.base_url == DEFAULT_BASE_URL
     assert config.api_key == "exhibit-key"
     assert config.model == DEFAULT_MODEL
+
+
+def test_max_iters_defaults_to_the_review_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXHIBIT_API_KEY", "test-key")
+    monkeypatch.delenv("EXHIBIT_MAX_ITERS", raising=False)
+
+    config = load_config()
+
+    assert config.max_iters == DEFAULT_MAX_ITERS
 
 
 def test_valid_remote_configuration_is_loaded(
