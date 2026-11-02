@@ -25,6 +25,7 @@ IGNORED_DIRS = {
     ".ruff_cache",
     "dist",
     "build",
+    "target",
     ".idea",
     ".vscode",
 }

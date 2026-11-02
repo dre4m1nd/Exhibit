@@ -245,6 +245,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
+    # A redirected pipe defaults to the locale codec (GBK on Windows), so a
+    # report containing any character outside it aborts mid-stream and loses
+    # the whole reply. The protocol is UTF-8 JSON lines.
+    sys.stdout.reconfigure(encoding="utf-8")
     args = _build_parser().parse_args(argv)
 
     emitter = Emitter()
