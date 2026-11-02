@@ -64,6 +64,17 @@ def test_prompt_files_cover_all_tasks() -> None:
         assert get_system_prompt(task)
 
 
+def test_repo_review_asks_for_deletion_but_guards_safety_code() -> None:
+    prompt = get_system_prompt("review_repo")
+
+    assert "过度设计" in prompt
+    assert "最小替代方案" in prompt
+    # The deletion dimension must never invite removing safety checks.
+    guard = prompt[prompt.index("不得出现在「可删除」建议里") :]
+    for keyword in ("校验", "权限", "错误处理", "安全"):
+        assert keyword in guard
+
+
 def test_unknown_task_is_rejected() -> None:
     with pytest.raises(KeyError, match="unknown task"):
         get_system_prompt("not-a-task")
