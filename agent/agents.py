@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from agentscope.agent import Agent, ReActConfig
+from agentscope.agent import Agent, ContextConfig, ReActConfig
 from agentscope.credential import OpenAICredential
 from agentscope.model import OpenAIChatModel
 from agentscope.permission import PermissionBehavior, PermissionRule
@@ -17,6 +17,16 @@ from .session import Session
 
 # Edit tools only stage a preview; ``FileEditor`` asks the user before writing.
 STAGED_EDIT_TOOLS = ("write_file", "replace_in_file", "create_directory")
+
+# A review peaks near 70-90k tokens, while the framework default only compresses
+# at 80% of the model window (102k for 128k models). The whole tool history was
+# therefore re-sent on every iteration. Compress at a quarter of the window and
+# cap a single tool result so the loop stays bounded.
+CONTEXT_CONFIG = ContextConfig(
+    tool_result_limit=1500,
+    trigger_ratio=0.25,
+    reserve_ratio=0.1,
+)
 
 
 def _allow_staged_edits(agent: Agent) -> None:
@@ -75,6 +85,7 @@ def build_agent(
         model=model,
         toolkit=toolkit,
         react_config=ReActConfig(max_iters=config.max_iters),
+        context_config=CONTEXT_CONFIG,
     )
 
 
@@ -120,6 +131,7 @@ def build_chat_agent(
         model=model,
         toolkit=toolkit,
         react_config=ReActConfig(max_iters=config.max_iters),
+        context_config=CONTEXT_CONFIG,
     )
     if mode == "agent" and editor is not None:
         _allow_staged_edits(agent)
