@@ -11,7 +11,7 @@ from pathlib import Path
 from agentscope.tool import FunctionTool
 
 GIT_TIMEOUT = 60
-MAX_DIFF_CHARS = 60000
+MAX_DIFF_CHARS = 12000
 
 
 @dataclass(frozen=True)
