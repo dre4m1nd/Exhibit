@@ -70,3 +70,31 @@ def test_cache_lives_outside_the_reviewed_repo(isolated_config: Path) -> None:
     review_cache.save(isolated_config, "arch_overview", "# 报告")
 
     assert not any(p.name == "cache" for p in isolated_config.iterdir())
+
+
+def test_cache_key_ignores_how_the_path_was_spelled(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative path and an absolute path must hit the same record."""
+    review_cache.save(isolated_config, "arch_overview", "# 报告")
+    monkeypatch.chdir(isolated_config.parent)
+
+    relative = review_cache.load(isolated_config.name, "arch_overview")
+
+    assert relative is not None
+    assert relative == review_cache.load(isolated_config, "arch_overview")
+    # The parent directory is a different repository and must not collide.
+    assert review_cache.load(".", "arch_overview") is None
+
+
+def test_review_git_is_not_reused(isolated_config: Path) -> None:
+    """A previous git review describes a different diff, so never reuse it."""
+    from agent.app import NON_INCREMENTAL_TASKS, _incremental_preface
+
+    review_cache.save(isolated_config, "review_git", "# 旧 diff 报告")
+    review_cache.save(isolated_config, "review_repo", "# 旧整仓报告")
+    (isolated_config / "app.py").write_text("changed\n", encoding="utf-8")
+
+    assert "review_git" in NON_INCREMENTAL_TASKS
+    assert _incremental_preface(isolated_config, "review_git") == ""
+    assert "旧整仓报告" in _incremental_preface(isolated_config, "review_repo")

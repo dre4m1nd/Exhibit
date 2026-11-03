@@ -213,6 +213,26 @@ async def _stream_agent(
     return report
 
 
+#: Tasks whose subject is the current diff, so a previous report describes
+#: different content and must not be reused.
+NON_INCREMENTAL_TASKS = frozenset({"review_git"})
+
+
+def _incremental_preface(repo: str | Path, task: str) -> str:
+    """Prompt preface telling the model what changed since the last review."""
+    if task in NON_INCREMENTAL_TASKS:
+        return ""
+    previous = review_cache.load(repo, task)
+    return review_cache.preface(previous, repo) if previous else ""
+
+
+def _remember_review(repo: str | Path, task: str, report: str) -> None:
+    """Cache the report so the next run of this task can be incremental."""
+    if task not in NON_INCREMENTAL_TASKS:
+        review_cache.save(repo, task, report)
+
+
+
 async def run(task: str, params: dict, emitter: Emitter) -> None:
     """Run one Exhibit task end to end."""
     repo_path = Path(params.get("repo_path") or ".").resolve()
@@ -228,9 +248,7 @@ async def run(task: str, params: dict, emitter: Emitter) -> None:
     config = load_config()
     model = params.get("model") or None
     emitter.status("scanning", f"任务：{task}")
-    repo_path = params.get("repo_path") or "."
-    previous = review_cache.load(repo_path, task)
-    preface = review_cache.preface(previous, repo_path) if previous else ""
+    preface = _incremental_preface(repo_path, task)
     if preface:
         emitter.status("scanning", "发现上次审查记录，只复核变更部分")
 
@@ -238,7 +256,7 @@ async def run(task: str, params: dict, emitter: Emitter) -> None:
     if not explore_model:
         agent = build_agent(task, config, model_name=model)
         report = await _stream_agent(agent, task, params, emitter, preface=preface)
-        review_cache.save(repo_path, task, report)
+        _remember_review(repo_path, task, report)
         return
 
     # Two phases: a cheap model pays for the exploration context, the main
@@ -265,7 +283,7 @@ async def run(task: str, params: dict, emitter: Emitter) -> None:
             f"{digest or '（取证阶段没有产出内容）'}\n\n"
         ),
     )
-    review_cache.save(repo_path, task, report)
+    _remember_review(repo_path, task, report)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -611,10 +629,15 @@ def _run_one_review(
     config = _session_config(store)
     if config is None:
         raise ValueError(_login_hint())
+    root = str(store.root)
+    preface = _incremental_preface(root, task)
+    if preface:
+        emitter.status("scanning", "发现上次审查记录，只复核变更部分")
     emitter.status("scanning", f"{scope}：{task}")
-    report = asyncio.run(_run_chat_review(task, config, params, emitter))
+    report = asyncio.run(_run_chat_review(task, config, params, emitter, preface))
     if report:
         store.active.add_message("assistant", report)
+        _remember_review(root, task, report)
     if task == "arch_overview" and report:
         store.remember_project_context(report)
     return {"empty": False, "message": ""}
@@ -654,10 +677,11 @@ async def _run_chat_review(
     config: Config,
     params: dict[str, str],
     emitter: Emitter,
+    preface: str = "",
 ) -> str:
     """Run one review agent and surface the final markdown as chat content."""
     agent = build_agent(task, config)
-    report = await _collect_review(agent, task, params, emitter)
+    report = await _collect_review(agent, task, params, emitter, preface)
     if report:
         emitter.chat_delta(report)
         emitter.chat_done(report)
@@ -671,9 +695,11 @@ async def _collect_review(
     task: str,
     params: dict[str, str],
     emitter: Emitter,
+    preface: str = "",
 ) -> str:
     """Collect the final review markdown while retaining progress events."""
-    text, truncated = await _consume(agent, get_user_prompt(task, params), emitter)
+    prompt = preface + get_user_prompt(task, params)
+    text, truncated = await _consume(agent, prompt, emitter)
     if text and truncated:
         text += TRUNCATION_NOTE
     return text

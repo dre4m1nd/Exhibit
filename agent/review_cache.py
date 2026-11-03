@@ -24,17 +24,23 @@ MAX_LISTED_CHANGES = 20
 MAX_CHANGED_RATIO = 0.5
 
 
-def _cache_file(repo: Path, task: str) -> Path:
-    digest = hashlib.sha1(str(repo).encode("utf-8")).hexdigest()[:16]
+def _repo_path(repo: str | Path) -> Path:
+    """Absolute repo path: the key must not depend on how the CLI spelled it."""
+    return Path(repo).expanduser().resolve()
+
+
+def _cache_file(repo: str | Path, task: str) -> Path:
+    digest = hashlib.sha1(str(_repo_path(repo)).encode("utf-8")).hexdigest()[:16]
     return config_dir() / "cache" / f"{digest}-{task}.json"
 
 
-def _snapshot(repo: Path) -> dict[str, list[int]]:
+def _snapshot(repo: str | Path) -> dict[str, list[int]]:
     """``relative path -> (mtime, size)``, pruning ignored and hidden dirs."""
-    if not repo.is_dir():
+    root = _repo_path(repo)
+    if not root.is_dir():
         return {}
     files: dict[str, list[int]] = {}
-    for dirpath, dirnames, filenames in os.walk(repo):
+    for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [
             name
             for name in dirnames
@@ -50,7 +56,7 @@ def _snapshot(repo: Path) -> dict[str, list[int]]:
                 stat = path.stat()
             except OSError:
                 continue
-            files[str(path.relative_to(repo))] = [int(stat.st_mtime), stat.st_size]
+            files[str(path.relative_to(root))] = [int(stat.st_mtime), stat.st_size]
     return files
 
 

@@ -11,6 +11,7 @@ React-Ink 渲染终端界面，两者通过 stdio 上的 JSON 行协议通信。
 | 计划模式 | `/plan` 只读分析；不注册写工具 |
 | 会话分叉 | `/fork` 复制历史、模式和文件记录 |
 | 四类审查 | `/init`、`/review arch\|audit\|repo\|git`、`/diff` |
+| 增量复审 | 同一仓库重复审查只复核变更文件，缓存放在用户配置目录 |
 | 自适应宽度 | 长路径、长模型 ID、长端点按终端列数截断（带「…」），窄终端不断框 |
 
 ## 界面一览
@@ -89,12 +90,18 @@ OpenRouter 默认使用 `openrouter/free` 免费路由，端点固定为
 `会话 main · plan · custom · group/master`）；`/status` 输出同样的字段，所以不
 用猜当前在调用哪个模型。
 
-```text
-/login       配置模型供应商与 API Key
-/provider    查看或切换模型供应商
-/model       查看或切换模型
-/logout      删除当前供应商凭据
-```
+| 命令 | 说明 |
+| --- | --- |
+| `/login` `/logout` `/provider` `/model` | 登录、退出登录、切换供应商与模型 |
+| `/status` | 会话、模式、供应商、模型、仓库与已读／已改文件 |
+| `/init` | 生成架构总览，并把项目上下文记入会话 |
+| `/review arch\|audit\|repo\|git` | 四类审查，逗号分隔可一次跑多个 |
+| `/diff` | 审查当前 Git 变更（工作区／commit range／分支） |
+| `/plan` | 进入或退出只读计划模式 |
+| `/fork` | 从当前对话创建分支会话 |
+| `/compact` `/clear` | 压缩或清空对话上下文 |
+| `/permissions` `/files` `/undo` | 写入策略、已读／已改文件、撤销最近一次修改 |
+| `/quit` | 退出（存在未确认写入时会阻止） |
 
 输入 `/` 会直接显示命令和一行说明，不需要 `/help`。
 
@@ -109,15 +116,30 @@ OpenRouter 默认使用 `openrouter/free` 免费路由，端点固定为
 - `EXHIBIT_MODEL`：默认 `gpt-5.4-mini`
 - `EXHIBIT_PROVIDER`：保存了多个供应商时，指定使用哪一个（无头与聊天模式均生效）
 - `EXHIBIT_MAX_ITERS`：ReAct 循环上限，默认 40（也决定一次运行的成本上限；报告规则会要求模型预留轮次写报告）
-- `EXHIBIT_MAX_OUTPUT_TOKENS`：单次审查/报告的最大输出 token，默认 16000；报告被截断时调大
+- `EXHIBIT_MAX_OUTPUT_TOKENS`：单次审查/报告的最大输出 token，默认 16000；模型提前结束
+  时报告末尾会附提示，调大后重试即可
+- `EXHIBIT_TIMEOUT`：单次模型请求的超时秒数，默认 600，聊天与审查模式同样生效
 - `EXHIBIT_PROMPT_DIR`：自定义提示词目录，默认 `agent/prompts/`
 - `EXHIBIT_EXPLORE_MODEL`：开启两阶段运行。先用这个（便宜的）模型做只读取证，
   再由主模型仅依据证据清单写报告；探索阶段那几十万字符的上下文不会进入主模型的
   计费。示例：`EXHIBIT_EXPLORE_MODEL=deepseek-flash`
+- `EXHIBIT_CONFIG_DIR`：凭据与复审缓存目录，默认 `%APPDATA%\Exhibit`
 
 提示词全部位于 `agent/prompts/*.md`。`chat.md`、`file_edit.md`、`plan.md` 用于聊天；
 四类审查提示词由 `report_rules.md` 追加共享规则；`user_prompt.md` 支持
-`{{repo_path}}` 与 `{{scope_line}}` 占位符。
+`{{repo_path}}`、`{{scope_line}}` 与 `{{untracked_hint}}` 占位符，漏填会直接报错。
+
+## 复审与成本
+
+- **增量复审**：同一仓库同一任务的报告缓存在用户配置目录，并为每个文件记下
+  `mtime + 大小`。下次运行时若变更占比不高，就把上次报告和变更清单作为前置上下文，
+  让模型只复核改动过的文件与旧报告里标注「未能确认」的部分；变更超过一半则丢弃旧结论、
+  按全新审查处理。适用于 `arch_overview`、`arch_audit`、`review_repo`；`review_git`
+  每次面对的都是新 diff，因此不复用旧报告。缓存不写进被审仓库。
+- **两阶段取证**：设置 `EXHIBIT_EXPLORE_MODEL` 后，先由便宜模型只读收集证据，
+  主模型只依据截到 12k 字符的证据清单写报告。
+- **迭代预算**：`EXHIBIT_MAX_ITERS` 同时是一次运行的成本上限。
+- **上下文压缩**：单条工具结果最多 1500 字符进入上下文，占用达到窗口 25% 时自动压缩。
 
 ## 文件修改与安全
 
@@ -127,6 +149,10 @@ OpenRouter 默认使用 `openrouter/free` 免费路由，端点固定为
 - 计划模式不注册写工具；审查任务始终只读。
 - `/files` 区分已读取与已修改文件；`/undo` 可撤销最近一次 Agent 修改。
 - 存在未确认写入时，`/quit` 和 `Ctrl+C` 会阻止退出。
+- git 工具固定在被审仓库根运行；越界 `repo_path` 直接报错，不会误操作另一个仓库。
+- `git_diff` 只接受 `--cached`、`--staged`、`--stat` 等只读参数，`--output=` 之类会被拒绝。
+- `/undo` 发现文件内容已被外部改动时拒绝撤销。
+- 审查过程只读：结束后工作区的 `git status` 与开始前一致。
 
 ## 开发
 
@@ -144,13 +170,21 @@ node node_modules\vitest\vitest.mjs run
 
 ```
 agent/            Python 智能体（AgentScope ReAct + 工具）
-  app.py          stdio 入口，常驻聊天循环
+  app.py          入口：无头任务与常驻聊天循环
+  agents.py       构建 ReAct agent、工具注册与上下文配置
+  config.py       环境变量与已保存凭据 → Config
   session.py      会话、计划模式、分叉与命令
+  chat.py         斜杠命令实现
   permissions.py  路径沙箱、预览、确认与撤销
+  review_cache.py 增量复审缓存（上次报告 + 文件快照）
+  credentials.py  供应商凭据的保存与读取
+  providers.py    内置供应商与端点校验
+  models.py       模型目录发现
   prompts/        聊天、计划、编辑与审查提示词
   prompt_loader.py  提示词加载与模板渲染
   protocol.py     JSON 行协议
-  tools/          文件系统与 git 工具
+  tools/fs.py     文件系统工具（列表、读取、搜索）
+  tools/git.py    git 工具（状态、diff、日志、分支对比）
 tui/              React-Ink 终端界面
 examples/         测试用样例仓库（内含未提交改动）
 tests/            Python 单测
