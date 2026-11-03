@@ -16,8 +16,8 @@ React-Ink 渲染终端界面，两者通过 stdio 上的 JSON 行协议通信。
 
 ## 界面一览
 
-以下截图来自真实终端会话（Windows ConPTY，112 列），目标是 `med-ins` 这个
-Spring Boot 医保结算仓库。
+以下截图来自真实终端会话（Windows ConPTY，112 列）。想自己复现，按下面
+「用一个开源项目试」的步骤，把目标换成任意 GitHub 仓库即可。
 
 ![启动横幅](docs/screenshots/01-banner.png)
 
@@ -50,28 +50,36 @@ cd tui; npm install; cd ..
 .\Exhibit.ps1
 ```
 
-在任意项目中使用全局命令：
+全局命令：装一次，之后在任意目录可用。
 
 ```powershell
 cd D:\Code\Exhibit\tui
 npm link
-
-cd D:\path\to\another-project
-exhibit
 ```
 
-`exhibit` 默认审查当前目录，也支持指定项目或子目录：
+用一个 GitHub 开源项目试（示例：`pallets/click`）：
 
 ```powershell
-exhibit -Repo src
-exhibit --repo-path D:\path\to\another-project
+git clone --depth 1 https://github.com/pallets/click D:\oss\click
+exhibit --repo-path D:\oss\click
+```
+
+也可以直接给目录，或只审子目录：
+
+```powershell
+cd D:\oss\click
+exhibit              # 审查当前目录
+exhibit -Repo src    # 只审 src 子树
 ```
 
 不带 TUI、直接跑一次任务（输出 JSON 事件流）：
 
 ```powershell
-.\.venv\Scripts\python.exe -m agent.app --task arch_overview --repo-path examples/fixture-repo
+.\.venv\Scripts\python.exe -m agent.app --task arch_overview --repo-path D:\oss\click
 ```
+
+首次运行做全量审查；同一仓库同一任务再跑会命中增量缓存，只复核变更文件
+（见「复审与成本」）。审查全程只读，跑完被审仓库的 `git status` 不变。
 
 ## 登录与配置
 
