@@ -1,18 +1,20 @@
 # -*- coding: utf-8 -*-
 """Exhibit's agent entrypoint.
 
-Reads one JSON ``init`` line from stdin, runs the AgentScope agent while
-streaming protocol events to stdout, and finishes with ``done``.
+Runs a task or the persistent chat loop, streaming protocol events to stdout
+and finishing with ``done``.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import json
 import os
 import sys
 from pathlib import Path
+from typing import Callable, Iterator
 
 from agentscope.agent import Agent
 from agentscope.event import (
@@ -27,15 +29,12 @@ from agentscope.message import TextBlock
 
 from .agents import build_agent, build_chat_agent
 from .chat import handle_command
-from .config import Config, load_config, max_iters
-
-#: Evidence digests above this size defeat the point of the two-phase run.
-EVIDENCE_CHARS = 12_000
-from .credentials import load_credentials
+from .config import Config, from_credential, load_config, max_iters
+from .credentials import SavedCredential, load_credentials
 from .permissions import FileEditor
 from .prompt_loader import get_evidence_prompt, get_user_prompt
+from . import review_cache
 from .protocol import (
-    MSG_INIT,
     MSG_CHAT,
     MSG_COMMAND,
     MSG_PERMISSION_RESPONSE,
@@ -46,6 +45,15 @@ from .protocol import (
 )
 from .session import SessionStore
 from .tools.git import GitReviewScope, inspect_git_review_scope
+
+#: Evidence digests above this size defeat the point of the two-phase run.
+EVIDENCE_CHARS = 12_000
+
+#: Appended when the model stops early, usually at its output token cap.
+TRUNCATION_NOTE = (
+    "\n\n> 报告可能因达到模型输出长度上限而被截断，"
+    "可在 `.env` 中调大 `EXHIBIT_MAX_OUTPUT_TOKENS` 后重试。"
+)
 
 
 def _parse_args(fragment: str) -> dict:
@@ -109,33 +117,30 @@ def _forward_tool_event(
         )
 
 
-async def _stream_agent(
+async def _consume(
     agent: Agent,
-    task: str,
-    params: dict,
+    prompt: str,
     emitter: Emitter,
     *,
-    preface: str = "",
-    emit_report: bool = True,
-) -> str:
-    """Run the agent, forward its events, and return the final text."""
-    user_prompt = preface + get_user_prompt(task, params)
+    on_text: Callable[[str], None] | None = None,
+    truncation_warning: bool = True,
+) -> tuple[str, bool]:
+    """Run one reply, forward its events, and return ``(text, truncated)``."""
     final_text: list[str] = []
     # tool_call_id -> [tool name, accumulated JSON argument fragment]
     calls: dict[str, list] = {}
     # tool_call_id -> accumulated tool result text
     results: dict[str, list[str]] = {}
+    truncated = False
 
     async for event in agent.reply_stream(
         Msg(
             name="user",
-            content=[TextBlock(type="text", text=user_prompt)],
+            content=[TextBlock(type="text", text=prompt)],
             role="user",
         ),
         yield_final_msg=True,
     ):
-        event_type = getattr(event, "type", None)
-
         if isinstance(event, Msg):
             # The final assistant message is the authoritative report.
             text = (event.get_text_content() or "").strip()
@@ -143,17 +148,17 @@ async def _stream_agent(
                 final_text[:] = [text]
             continue
 
+        event_type = getattr(event, "type", None)
         if event_type == EventType.MODEL_CALL_START:
             emitter.status("thinking", "模型推理中")
-
         elif event_type == EventType.THINKING_BLOCK_DELTA:
             if isinstance(event, ThinkingBlockDeltaEvent) and event.delta:
                 emitter.think_delta(event.delta)
-
         elif event_type == EventType.TEXT_BLOCK_DELTA:
             if isinstance(event, TextBlockDeltaEvent) and event.delta:
                 final_text.append(event.delta)
-                emitter.token(event.delta)
+                if on_text is not None:
+                    on_text(event.delta)
         elif event_type in {
             EventType.TOOL_CALL_START,
             EventType.TOOL_CALL_DELTA,
@@ -165,16 +170,39 @@ async def _stream_agent(
             if event_type == EventType.TOOL_CALL_START:
                 # Discard the draft only once the model stops talking and acts.
                 emitter.reset()
-
         elif event_type == EventType.REPLY_END:
-            pass
+            # A reply that ends without completing usually means the model hit
+            # its output token limit; flag it so the user is not left with a
+            # silently clipped report.
+            if (
+                truncation_warning
+                and getattr(event, "finished_reason", None) != "completed"
+            ):
+                truncated = True
 
-    report = "".join(final_text).strip()
-    if not report:
-        # Fall back to the final assistant message in the context.
+    text = "".join(final_text).strip()
+    if not text:
+        # Some providers only expose the final answer through agent context.
         last_msg = agent._get_last_msg()  # noqa: SLF001
         if last_msg is not None:
-            report = (last_msg.get_text_content() or "").strip()
+            text = (last_msg.get_text_content() or "").strip()
+    return text, truncated
+
+
+async def _stream_agent(
+    agent: Agent,
+    task: str,
+    params: dict,
+    emitter: Emitter,
+    *,
+    preface: str = "",
+    emit_report: bool = True,
+) -> str:
+    """Run the agent, forward its events, and return the final text."""
+    prompt = preface + get_user_prompt(task, params)
+    report, truncated = await _consume(agent, prompt, emitter, on_text=emitter.token)
+    if report and truncated:
+        report += TRUNCATION_NOTE
     if not emit_report:
         return report
     if report:
@@ -200,10 +228,17 @@ async def run(task: str, params: dict, emitter: Emitter) -> None:
     config = load_config()
     model = params.get("model") or None
     emitter.status("scanning", f"任务：{task}")
+    repo_path = params.get("repo_path") or "."
+    previous = review_cache.load(repo_path, task)
+    preface = review_cache.preface(previous, repo_path) if previous else ""
+    if preface:
+        emitter.status("scanning", "发现上次审查记录，只复核变更部分")
+
     explore_model = os.getenv("EXHIBIT_EXPLORE_MODEL", "").strip()
     if not explore_model:
         agent = build_agent(task, config, model_name=model)
-        await _stream_agent(agent, task, params, emitter)
+        report = await _stream_agent(agent, task, params, emitter, preface=preface)
+        review_cache.save(repo_path, task, report)
         return
 
     # Two phases: a cheap model pays for the exploration context, the main
@@ -219,34 +254,18 @@ async def run(task: str, params: dict, emitter: Emitter) -> None:
     digest = digest[:EVIDENCE_CHARS]
     emitter.status("writing", f"写报告：{config.model}")
     writer = build_agent(task, config, model_name=model, tools=False)
-    await _stream_agent(
+    report = await _stream_agent(
         writer,
         task,
         params,
         emitter,
-        preface=(
+        preface=preface + (
             "以下是只读取证阶段收集的证据清单，请据此撰写最终报告；"
             "证据未覆盖的部分写进「未能确认」。\n\n"
             f"{digest or '（取证阶段没有产出内容）'}\n\n"
         ),
     )
-
-
-def _read_init(stream) -> dict:
-    """Block until a valid ``init`` message arrives on ``stream``."""
-    while True:
-        line = stream.readline()
-        if not line:
-            raise ProtocolError("stdin closed before init message")
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            message = decode(line)
-        except ProtocolError:
-            continue
-        if message.get("type") == MSG_INIT:
-            return message
+    review_cache.save(repo_path, task, report)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -309,6 +328,28 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _emit_pending_permission(
+    editor: FileEditor,
+    store: SessionStore,
+    emitter: Emitter,
+    requests: Iterator[int],
+) -> str | None:
+    """Announce the staged preview the user must confirm, if any."""
+    preview = editor.pending
+    if preview is None:
+        return None
+    request_id = f"edit-{next(requests)}"
+    emitter.permission_request(
+        request_id,
+        preview.path,
+        preview.action,
+        preview.summary(),
+        session_id=store.active.session_id,
+        trusted=editor.is_trusted(store.active.session_id),
+    )
+    return request_id
+
+
 def _chat_loop(repo_path: Path, emitter: Emitter) -> None:
     """Read chat and command messages until stdin closes."""
     store = SessionStore(repo_path)
@@ -318,6 +359,8 @@ def _chat_loop(repo_path: Path, emitter: Emitter) -> None:
     # the provider and model the session will actually use.
     _session_config(store)
     emitter.session(store.status())
+    requests = itertools.count(1)
+    last_request_id: str | None = None
     while True:
         line = sys.stdin.readline()
         if not line:
@@ -346,16 +389,9 @@ def _chat_loop(repo_path: Path, emitter: Emitter) -> None:
                 if reply:
                     store.active.add_message("assistant", reply)
                 emitter.chat_done(reply)
-                if editor.pending is not None:
-                    preview = editor.pending
-                    emitter.permission_request(
-                        f"edit-{len(store.active.changed_files) + 1}",
-                        preview.path,
-                        preview.action,
-                        preview.summary(),
-                        session_id=store.active.session_id,
-                        trusted=editor.is_trusted(store.active.session_id),
-                    )
+                last_request_id = _emit_pending_permission(
+                    editor, store, emitter, requests
+                )
             except Exception as exc:  # noqa: BLE001 - show model failures in TUI
                 emitter.error(f"{type(exc).__name__}: {exc}")
         elif message_type == MSG_COMMAND:
@@ -375,52 +411,42 @@ def _chat_loop(repo_path: Path, emitter: Emitter) -> None:
             except Exception as exc:  # noqa: BLE001 - show command errors in the TUI
                 emitter.error(str(exc))
         elif message_type == MSG_PERMISSION_RESPONSE:
-            approved = bool(message.get("approved"))
+            if message.get("request_id") != last_request_id:
+                # A late answer for an already-resolved preview must not touch
+                # whatever the agent staged since.
+                emitter.chat_done("已忽略过期的确认请求")
+                continue
+            last_request_id = None
             if editor.pending is None:
                 emitter.error("没有等待处理中的文件修改")
                 continue
+            approved = bool(message.get("approved"))
+            scope = str(message.get("scope", "once"))
             session_id = store.active.session_id
-            if not approved:
-                scope = str(message.get("scope", "once"))
+            if approved:
                 if scope == "session":
                     editor.trust_session(session_id)
-                    store.active.add_message("system", "已允许本会话后续文件写入。")
-                else:
-                    store.active.add_message("system", "用户拒绝了文件修改。")
+                preview = editor.approve_pending(session_id)
+                if preview is not None:
+                    relative = Path(preview.path).resolve().relative_to(editor.root)
+                    name = str(relative).replace("\\", "/")
+                    if name not in store.active.changed_files:
+                        store.active.changed_files.append(name)
+                    store.active.add_message("system", f"已应用文件修改：{name}")
+                    emitter.chat_done(f"已应用修改：{name}")
+            elif scope == "session":
+                # "Always allow" also settles the preview on screen.
+                editor.trust_session(session_id)
+                store.active.add_message("system", "已允许本会话后续文件写入。")
                 editor.reject_pending(session_id)
-                emitter.chat_done(
-                    "已允许本会话后续写入。"
-                    if scope == "session"
-                    else "已拒绝文件修改。"
-                )
-                if editor.pending is not None:
-                    preview = editor.pending
-                    emitter.permission_request(
-                        f"edit-{len(store.active.changed_files) + 1}",
-                        preview.path,
-                        preview.action,
-                        preview.summary(),
-                        session_id=session_id,
-                    )
-                continue
-            preview = editor.approve_pending(session_id)
-            if preview is not None:
-                relative = Path(preview.path).resolve().relative_to(editor.root)
-                name = str(relative).replace("\\", "/")
-                if name not in store.active.changed_files:
-                    store.active.changed_files.append(name)
-                store.active.add_message("system", f"已应用文件修改：{name}")
-                emitter.chat_done(f"已应用修改：{name}")
-                if editor.pending is not None:
-                    next_preview = editor.pending
-                    emitter.permission_request(
-                        f"edit-{len(store.active.changed_files) + 1}",
-                        next_preview.path,
-                        next_preview.action,
-                        next_preview.summary(),
-                        session_id=session_id,
-                        trusted=editor.is_trusted(session_id),
-                    )
+                emitter.chat_done("已允许本会话后续写入。")
+            else:
+                store.active.add_message("system", "用户拒绝了文件修改。")
+                editor.reject_pending(session_id)
+                emitter.chat_done("已拒绝文件修改。")
+            last_request_id = _emit_pending_permission(
+                editor, store, emitter, requests
+            )
 
 
 _REVIEW_ALIASES = {
@@ -532,10 +558,7 @@ def _run_review_command(
     if name == "/review" and len(requested) > 1:
         for task in [review_tasks[item] for item in requested]:
             _run_one_review(store, task, args, emitter, scope)
-        return {
-            "tasks": [review_tasks[item] for item in requested],
-            "shown_in_chat": True,
-        }
+        return {"tasks": [review_tasks[item] for item in requested]}
     task = (
         review_tasks[requested[0]]
         if name == "/review"
@@ -546,7 +569,6 @@ def _run_review_command(
     outcome = _run_one_review(store, task, args, emitter, scope)
     return {
         "task": task,
-        "shown_in_chat": True,
         **({"empty": True, "message": outcome["message"]} if outcome.get("empty") else {}),
     }
 
@@ -651,58 +673,10 @@ async def _collect_review(
     emitter: Emitter,
 ) -> str:
     """Collect the final review markdown while retaining progress events."""
-    user_prompt = get_user_prompt(task, params)
-    parts: list[str] = []
-    final_text = ""
-    calls: dict[str, list] = {}
-    results: dict[str, list[str]] = {}
-    truncated = False
-    async for event in agent.reply_stream(
-        Msg(
-            name="user",
-            content=[TextBlock(type="text", text=user_prompt)],
-            role="user",
-        ),
-        yield_final_msg=True,
-    ):
-        if isinstance(event, Msg):
-            text = (event.get_text_content() or "").strip()
-            if text:
-                final_text = text
-            continue
-        event_type = getattr(event, "type", None)
-        if event_type == EventType.TEXT_BLOCK_DELTA:
-            if isinstance(event, TextBlockDeltaEvent) and event.delta:
-                parts.append(event.delta)
-        elif event_type == EventType.THINKING_BLOCK_DELTA:
-            if getattr(event, "delta", ""):
-                emitter.think_delta(event.delta)
-        elif event_type in {
-            EventType.TOOL_CALL_START,
-            EventType.TOOL_CALL_DELTA,
-            EventType.TOOL_CALL_END,
-            EventType.TOOL_RESULT_TEXT_DELTA,
-            EventType.TOOL_RESULT_END,
-        }:
-            _forward_tool_event(event, emitter, calls, results)
-        elif event_type == EventType.REPLY_END:
-            # A reply that ends without completing usually means the model hit
-            # its output token limit; flag it so the user is not left with a
-            # silently clipped report.
-            if getattr(event, "finished_reason", None) != "completed":
-                truncated = True
-    report = (final_text or "".join(parts)).strip()
-    if not report:
-        # Some providers only expose the final answer through agent context.
-        last_msg = agent._get_last_msg()  # noqa: SLF001
-        if last_msg is not None:
-            report = (last_msg.get_text_content() or "").strip()
-    if report and truncated:
-        report += (
-            "\n\n> 报告可能因达到模型输出长度上限而被截断，"
-            "可在 `.env` 中调大 `EXHIBIT_MAX_OUTPUT_TOKENS` 后重试。"
-        )
-    return report
+    text, truncated = await _consume(agent, get_user_prompt(task, params), emitter)
+    if text and truncated:
+        text += TRUNCATION_NOTE
+    return text
 
 
 def _login_hint() -> str:
@@ -719,13 +693,13 @@ def _session_config(store: SessionStore) -> Config | None:
     """Resolve the active provider credential into a model config."""
     session = store.active
     if session.api_key and session.base_url and session.model:
-        return Config(
-            base_url=session.base_url,
-            api_key=session.api_key,
-            model=session.model,
-            max_iters=max_iters(),
-            request_timeout=600,
-            max_output_tokens=16000,
+        return from_credential(
+            SavedCredential(
+                provider=session.provider,
+                api_key=session.api_key,
+                base_url=session.base_url,
+                model=session.model,
+            )
         )
     saved = load_credentials()
     requested = (
@@ -737,50 +711,18 @@ def _session_config(store: SessionStore) -> Config | None:
     if credential is None:
         return None
     session.configure(credential)
-    return Config(
-        base_url=credential.base_url,
-        api_key=credential.api_key,
-        model=credential.model,
-        max_iters=max_iters(),
-        request_timeout=600,
-        max_output_tokens=16000,
-    )
+    return from_credential(credential)
 
 
 async def _chat_once(agent: Agent, text: str, emitter: Emitter) -> str:
     """Stream one chat response and return its complete text."""
-    parts: list[str] = []
-    calls: dict[str, list] = {}
-    results: dict[str, list[str]] = {}
-    async for event in agent.reply_stream(
-        Msg(
-            name="user",
-            content=[TextBlock(type="text", text=text)],
-            role="user",
-        ),
-        yield_final_msg=True,
-    ):
-        if isinstance(event, Msg):
-            final = (event.get_text_content() or "").strip()
-            if final:
-                parts[:] = [final]
-            continue
-        if getattr(event, "type", None) == EventType.TEXT_BLOCK_DELTA:
-            if isinstance(event, TextBlockDeltaEvent) and event.delta:
-                parts.append(event.delta)
-                emitter.chat_delta(event.delta)
-        elif getattr(event, "type", None) in {
-            EventType.TOOL_CALL_START,
-            EventType.TOOL_CALL_DELTA,
-            EventType.TOOL_CALL_END,
-            EventType.TOOL_RESULT_TEXT_DELTA,
-            EventType.TOOL_RESULT_END,
-        }:
-            _forward_tool_event(event, emitter, calls, results)
-        elif getattr(event, "type", None) == EventType.THINKING_BLOCK_DELTA:
-            if getattr(event, "delta", ""):
-                emitter.think_delta(event.delta)
-    reply = "".join(parts).strip()
+    reply, _ = await _consume(
+        agent,
+        text,
+        emitter,
+        on_text=emitter.chat_delta,
+        truncation_warning=False,
+    )
     if not reply:
         raise ValueError(
             "模型没有返回任何内容；请检查 OpenRouter 模型权限或稍后重试"

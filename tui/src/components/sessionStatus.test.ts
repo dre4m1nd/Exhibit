@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sessionStatus } from "./App.js";
+import { sessionStatus } from "../formatters.js";
 
 describe("sessionStatus", () => {
   it("names the session when nothing else is known", () => {

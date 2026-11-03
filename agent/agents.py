@@ -77,6 +77,7 @@ def build_agent(
         parameters=OpenAIChatModel.Parameters(
             max_tokens=config.max_output_tokens,
         ),
+        client_kwargs={"timeout": config.request_timeout},
     )
     toolkit = Toolkit(tools=[*build_fs_tools(), *build_git_tools()] if tools else [])
     return Agent(
@@ -109,6 +110,7 @@ def build_chat_agent(
         parameters=OpenAIChatModel.Parameters(
             max_tokens=config.max_output_tokens,
         ),
+        client_kwargs={"timeout": config.request_timeout},
     )
     context = "\n\n".join(
         f"{item['role']}: {item['content']}" for item in history[-20:]

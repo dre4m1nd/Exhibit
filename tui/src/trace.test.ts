@@ -79,3 +79,24 @@ describe("trace aggregation", () => {
     ).toBe("list_dir 失败");
   });
 });
+
+describe("trace cap", () => {
+  it("keeps at most the most recent steps", () => {
+    const steps = Array.from({ length: 60 }, () => thinking("…")).reduce(
+      appendTraceStep,
+      [] as TraceStep[],
+    );
+    expect(steps.length).toBeLessThanOrEqual(40);
+    // Adjacent thinking deltas merge, so the latest one is still present at the tail.
+    expect(steps[steps.length - 1].text.endsWith("…")).toBe(true);
+  });
+
+  it("drops the oldest steps once the cap is exceeded", () => {
+    const steps = Array.from({ length: 50 }, (_, index) => tool(`t${index}`)).reduce(
+      appendTraceStep,
+      [] as TraceStep[],
+    );
+    expect(steps.length).toBeLessThanOrEqual(40);
+    expect(steps[0].text).toBe("t10()");
+  });
+});

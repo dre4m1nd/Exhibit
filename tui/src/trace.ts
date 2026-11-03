@@ -6,6 +6,9 @@ export interface TraceStep {
   ok?: boolean;
 }
 
+/** How many steps the live trace keeps; older ones only cost render time. */
+const MAX_LIVE_STEPS = 40;
+
 /**
  * Append a streamed step, merging adjacent thinking deltas into one segment.
  *
@@ -22,9 +25,9 @@ export function appendTraceStep(
     return [
       ...steps.slice(0, -1),
       { ...last, text: last.text + step.text },
-    ];
+    ].slice(-MAX_LIVE_STEPS);
   }
-  return [...steps, step];
+  return [...steps, step].slice(-MAX_LIVE_STEPS);
 }
 
 /**

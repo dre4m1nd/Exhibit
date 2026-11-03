@@ -14,6 +14,8 @@ from .providers import validate_base_url
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-5.4-mini"
 DEFAULT_MAX_ITERS = 40
+DEFAULT_TIMEOUT = 600.0
+DEFAULT_MAX_OUTPUT_TOKENS = 16000
 OPENROUTER_API_KEY = "OPENROUTER_API_KEY"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_MODEL = "openrouter/free"
@@ -28,7 +30,7 @@ class Config:
     model: str
     max_iters: int
     request_timeout: float
-    max_output_tokens: int = 16000
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def max_iters() -> int:
@@ -70,8 +72,24 @@ def load_config() -> Config:
             else saved.model if saved is not None else DEFAULT_MODEL
         ),
         max_iters=max_iters(),
-        request_timeout=float(os.getenv("EXHIBIT_TIMEOUT", "600")),
-        max_output_tokens=int(os.getenv("EXHIBIT_MAX_OUTPUT_TOKENS", "16000")),
+        request_timeout=float(os.getenv("EXHIBIT_TIMEOUT", str(DEFAULT_TIMEOUT))),
+        max_output_tokens=int(
+            os.getenv("EXHIBIT_MAX_OUTPUT_TOKENS", str(DEFAULT_MAX_OUTPUT_TOKENS))
+        ),
+    )
+
+
+def from_credential(credential: SavedCredential) -> Config:
+    """Build a Config from a saved credential plus the env overrides."""
+    return Config(
+        base_url=credential.base_url,
+        api_key=credential.api_key,
+        model=credential.model,
+        max_iters=max_iters(),
+        request_timeout=float(os.getenv("EXHIBIT_TIMEOUT", str(DEFAULT_TIMEOUT))),
+        max_output_tokens=int(
+            os.getenv("EXHIBIT_MAX_OUTPUT_TOKENS", str(DEFAULT_MAX_OUTPUT_TOKENS))
+        ),
     )
 
 

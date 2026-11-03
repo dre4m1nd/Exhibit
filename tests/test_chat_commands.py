@@ -124,7 +124,7 @@ def test_review_task_mapping(isolated_env, monkeypatch) -> None:
     )
 
     assert captured["task"] == "arch_audit"
-    assert data == {"task": "arch_audit", "shown_in_chat": True}
+    assert data == {"task": "arch_audit"}
 
 
 def test_review_accepts_multiple_tasks(isolated_env, monkeypatch) -> None:
@@ -158,7 +158,7 @@ def test_review_accepts_multiple_tasks(isolated_env, monkeypatch) -> None:
     )
 
     assert captured == ["arch_audit", "review_git"]
-    assert data == {"tasks": ["arch_audit", "review_git"], "shown_in_chat": True}
+    assert data == {"tasks": ["arch_audit", "review_git"]}
 
 
 @pytest.mark.parametrize("value", ["REPO", " repo ", "repo,"])
@@ -197,7 +197,7 @@ def test_review_normalizes_task_names(
     )
 
     assert captured == ["review_repo"]
-    assert data == {"task": "review_repo", "shown_in_chat": True}
+    assert data == {"task": "review_repo"}
 
 
 @pytest.mark.parametrize(
@@ -249,7 +249,7 @@ def test_review_accepts_natural_language_task_names(
     )
 
     assert captured == [expected]
-    assert data == {"task": expected, "shown_in_chat": True}
+    assert data == {"task": expected}
 
 
 @pytest.mark.parametrize(
@@ -296,7 +296,7 @@ def test_review_accepts_space_separated_natural_language(
     )
 
     assert captured == [expected]
-    assert data == {"task": expected, "shown_in_chat": True}
+    assert data == {"task": expected}
 
 
 def test_review_rejects_unknown_task_with_clear_error(isolated_env) -> None:
@@ -347,7 +347,7 @@ def test_review_without_task_defaults_to_repo(
     )
 
     assert captured == ["review_repo"]
-    assert data == {"task": "review_repo", "shown_in_chat": True}
+    assert data == {"task": "review_repo"}
 
 
 def test_unknown_command_is_rejected(isolated_env) -> None:

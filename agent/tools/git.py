@@ -3,15 +3,18 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from agentscope.tool import FunctionTool
 
+from .fs import resolve_repo_path
+
 GIT_TIMEOUT = 60
 MAX_DIFF_CHARS = 12000
+# Only read-only diff flags. Anything else (e.g. `--output=`) can write files.
+ALLOWED_DIFF_FLAGS = {"--cached", "--staged", "--stat"}
 
 
 @dataclass(frozen=True)
@@ -26,14 +29,26 @@ class GitReviewScope:
     reason: str = ""
 
 
+def _repo_dir(repo_path: str) -> Path:
+    """The repository git commands must run in; raises ValueError if outside."""
+    return resolve_repo_path(repo_path)
+
+
+def _diff_target_args(target: str) -> list[str]:
+    """Split a diff target, rejecting flags that can write files or read outside."""
+    tokens = target.split()
+    for token in tokens:
+        if token.startswith("-") and token not in ALLOWED_DIFF_FLAGS:
+            raise ValueError(f"不支持的 diff 参数 {token}")
+    return tokens
+
+
 def _run_git(args: list[str], repo_path: str) -> str:
     """Run a git command and return its stdout, or an error message."""
-    requested = Path(repo_path).resolve()
-    configured = os.getenv("EXHIBIT_REPO_ROOT")
-    # Git tools always act on the repository under review. A model path may be
-    # relative to the process cwd, so anything that does not resolve to that
-    # root would otherwise inspect the wrong repository.
-    repo = Path(configured).resolve() if configured else requested
+    try:
+        repo = _repo_dir(repo_path)
+    except ValueError as exc:
+        return f"错误：{exc}"
     if not repo.exists():
         return f"错误：仓库路径不存在 {repo_path}"
     try:
@@ -151,6 +166,11 @@ def git_diff(repo_path: str = ".", target: str = "") -> str:
         repo_path: 仓库路径。
         target: 可选的 diff 目标，例如文件名、`--cached`、`HEAD~1`。
     """
+    try:
+        target_args = _diff_target_args(target) if target else []
+        repo = _repo_dir(repo_path)
+    except ValueError as exc:
+        return f"错误：{exc}"
     # Untracked files are only visible to `git diff` once they are
     # intent-to-add; this makes them part of the working-tree diff so an
     # untracked-only review still sees their full new content.
@@ -165,7 +185,7 @@ def git_diff(repo_path: str = ".", target: str = "") -> str:
                 path = line[3:].strip()
                 result = subprocess.run(
                     ["git", "add", "-N", "--", path],
-                    cwd=str(Path(repo_path).resolve()),
+                    cwd=str(repo),
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
@@ -176,19 +196,17 @@ def git_diff(repo_path: str = ".", target: str = "") -> str:
                 if result.returncode == 0:
                     intent_added.append(path)
     try:
-        args = ["diff"]
-        if target:
-            args.extend(target.split())
-        args.append("--stat")
-        stat = _run_git(args, repo_path)
-        detail = _run_git(args[:-1], repo_path)
-        return f"{stat}\n\n{detail}"
+        # `--stat --patch` emits the summary block and the patch in one run;
+        # `--` keeps a target that names a file from being read as a flag.
+        return _run_git(
+            ["diff", *target_args, "--stat", "--patch", "--"], repo_path
+        )
     finally:
         # Remove the intent-to-add markers so `git status` is unchanged.
         for path in intent_added:
             subprocess.run(
                 ["git", "rm", "--cached", "--", path],
-                cwd=str(Path(repo_path).resolve()),
+                cwd=str(repo),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -225,10 +243,11 @@ def git_branch_diff(repo_path: str = ".", base: str = "main", head: str = "") ->
         base: 基线分支或提交，默认 main。
         head: 目标分支或提交，默认为当前 HEAD。
     """
+    for token in (base, head):
+        if token and (token.startswith("-") or any(c.isspace() for c in token)):
+            return "错误：不支持的 diff 目标"
     target = f"{base}..{head}" if head else base
-    stat = _run_git(["diff", "--stat", target], repo_path)
-    detail = _run_git(["diff", target], repo_path)
-    return f"{stat}\n\n{detail}"
+    return _run_git(["diff", target, "--stat", "--patch"], repo_path)
 
 
 def build_git_tools() -> list[FunctionTool]:

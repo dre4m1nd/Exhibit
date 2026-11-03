@@ -4,6 +4,8 @@ export interface SlashCommand {
   name: string;
   description: string;
   requiresConfirm?: boolean;
+  /** Prompt shown while waiting for the `y` that runs the command. */
+  confirmHint?: string;
 }
 
 export interface Suggestion {
@@ -17,12 +19,22 @@ export interface Suggestion {
 
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/login", description: "配置模型供应商与 API Key" },
-  { name: "/logout", description: "删除当前供应商凭据", requiresConfirm: true },
+  {
+    name: "/logout",
+    description: "删除当前供应商凭据",
+    requiresConfirm: true,
+    confirmHint: "删除当前供应商凭据？输入 y 确认，其它键取消",
+  },
   { name: "/provider", description: "查看或切换模型供应商" },
   { name: "/model", description: "查看或切换模型" },
   { name: "/status", description: "查看当前会话状态" },
   { name: "/init", description: "生成架构总览与项目上下文" },
-  { name: "/clear", description: "清空当前对话上下文", requiresConfirm: true },
+  {
+    name: "/clear",
+    description: "清空当前对话上下文",
+    requiresConfirm: true,
+    confirmHint: "清空当前对话上下文？输入 y 确认，其它键取消",
+  },
   { name: "/compact", description: "压缩当前对话上下文" },
   { name: "/plan", description: "进入或退出计划模式" },
   { name: "/fork", description: "从当前对话创建分支会话" },

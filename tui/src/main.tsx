@@ -50,8 +50,6 @@ export function ensureFreshBuild(): void {
   }
 }
 
-const model = process.env.EXHIBIT_MODEL ?? "gpt-5.4-mini";
-
 /** Wrap text in a 24-bit ANSI foreground colour from a `#RRGGBB` token. */
 function paint(hex: string, text: string): string {
   const [red, green, blue] = [1, 3, 5].map((offset) =>
@@ -106,7 +104,7 @@ if (options?.help) {
         .map((line, index) => paint(index === 0 ? theme.accent : theme.muted, line))
         .join("\n") + "\n",
     );
-    render(<App model={model} repoPath={options.repoPath} />, {
+    render(<App repoPath={options.repoPath} />, {
       exitOnCtrlC: false,
     });
   } catch (error) {

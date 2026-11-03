@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -36,14 +35,6 @@ MAX_READ_LINES = 400
 MAX_MATCHES = 200
 
 
-@dataclass(frozen=True)
-class Listing:
-    """The result of listing a directory."""
-
-    root: str
-    entries: list[str]
-    truncated: bool
-
 
 def _resolve_inside(root: Path, path: str) -> Path:
     """Resolve ``path`` under ``root``, refusing to escape it."""
@@ -74,8 +65,17 @@ def _repo_root() -> Path:
     return Path(configured).resolve() if configured else Path.cwd().resolve()
 
 
-def _is_ignored(path: Path) -> bool:
-    return any(part in IGNORED_DIRS for part in path.parts)
+def _is_ignored(path: Path, root: Path) -> bool:
+    """Ignore noise directories by their position below ``root``.
+
+    Matching on absolute parts would ignore the whole repository whenever one
+    of its ancestors happened to be named ``build`` or ``dist``.
+    """
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return False
+    return any(part in IGNORED_DIRS for part in parts)
 
 
 def list_dir(path: str = ".", max_depth: int = 3) -> str:
@@ -110,7 +110,7 @@ def list_dir(path: str = ".", max_depth: int = 3) -> str:
             if len(entries) >= MAX_TREE_ENTRIES:
                 truncated = True
                 return
-            if _is_ignored(child):
+            if _is_ignored(child, root):
                 continue
             is_dir = child.is_dir()
             indent = "  " * depth
@@ -167,8 +167,6 @@ def read_file(path: str, offset: int = 1, limit: int = 120) -> str:
     try:
         size = target.stat().st_size
         with target.open("r", encoding="utf-8", errors="replace") as handle:
-            if size > MAX_FILE_BYTES:
-                handle.seek(0)
             lines: list[str] = []
             for index, line in enumerate(handle, start=1):
                 if index < offset:
@@ -183,7 +181,7 @@ def read_file(path: str, offset: int = 1, limit: int = 120) -> str:
         return f"（{path} 在 offset={offset} 之后没有内容）"
     header = f"文件 {target}"
     if size > MAX_FILE_BYTES:
-        header += f"（文件 {size} 字节，仅展示前若干行，请配合 grep 使用）"
+        header += f"（文件 {size} 字节，仅返回请求的行范围）"
     return f"{header}：\n" + "\n".join(lines)
 
 
@@ -211,34 +209,31 @@ def grep_files(pattern: str, path: str = ".", head_limit: int = 50) -> str:
 
     head_limit = max(1, min(head_limit, MAX_MATCHES))
     matches: list[str] = []
-    total = 0
 
     files = [root] if root.is_file() else _iter_files(root)
     for file_path in files:
+        try:
+            if file_path.stat().st_size > MAX_FILE_BYTES:
+                continue
+        except OSError:
+            continue
         if _looks_binary(file_path):
             continue
         try:
             with file_path.open("r", encoding="utf-8", errors="replace") as fh:
                 for line_no, line in enumerate(fh, start=1):
                     if regex.search(line):
-                        total += 1
-                        if len(matches) < head_limit:
-                            matches.append(
-                                f"{file_path}:{line_no}: {line.strip()}"
-                            )
+                        matches.append(f"{file_path}:{line_no}: {line.strip()}")
+                        if len(matches) >= head_limit:
+                            break
         except OSError:
             continue
-        if total >= head_limit and len(matches) >= head_limit:
+        if len(matches) >= head_limit:
             break
 
     if not matches:
         return f"未找到匹配：{pattern}"
-    footer = (
-        f"\n\n（共 {total} 条匹配，仅显示前 {len(matches)} 条）"
-        if total > len(matches)
-        else ""
-    )
-    return "匹配结果：\n" + "\n".join(matches) + footer
+    return "匹配结果：\n" + "\n".join(matches)
 
 
 def _iter_files(root: Path) -> Any:
@@ -246,7 +241,7 @@ def _iter_files(root: Path) -> Any:
     stack = [root]
     while stack:
         current = stack.pop()
-        if _is_ignored(current):
+        if _is_ignored(current, root):
             continue
         if current.is_file():
             yield current
@@ -322,12 +317,17 @@ def build_edit_tools(
     ]
 
 
+def resolve_repo_path(path: str) -> Path:
+    """Resolve a model-supplied path inside the review sandbox."""
+    return _resolve_inside(_repo_root(), path)
+
+
 __all__ = [
     "IGNORED_DIRS",
-    "Listing",
     "build_edit_tools",
     "build_fs_tools",
     "grep_files",
     "list_dir",
     "read_file",
+    "resolve_repo_path",
 ]

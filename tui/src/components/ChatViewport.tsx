@@ -13,8 +13,8 @@ import {
 import type { TraceStep } from "../trace.js";
 import {
   PALETTE_HEIGHT,
-  suggestionsFor,
   windowAround,
+  type Suggestion,
 } from "../commands.js";
 
 /** Chrome outside the message viewport: input, status and live trace. */
@@ -50,6 +50,7 @@ export function ChatViewport({
   status,
   planMode,
   busy,
+  suggestions,
   selected = -1,
   elapsed = 0,
   traceExpanded = false,
@@ -62,13 +63,13 @@ export function ChatViewport({
   status: string;
   planMode: boolean;
   busy: boolean;
+  suggestions: Suggestion[];
   selected?: number;
   elapsed?: number;
   traceExpanded?: boolean;
   liveTrace?: TraceStep[];
   failed?: boolean;
 }) {
-  const suggestions = suggestionsFor(input, planMode);
   const { start, end } = windowAround(selected, suggestions.length, PALETTE_HEIGHT);
   const shown = suggestions.slice(start, end);
   const choosingReview = suggestions.some((item) => item.kind === "review");
@@ -76,13 +77,20 @@ export function ChatViewport({
 
   const contentWidth = Math.max(20, size.columns - 2);
   const paletteRows = shown.length === 0 ? 0 : shown.length + 1;
-  const liveLines = tailLines(
-    buildLiveTraceLines(liveTrace, contentWidth, traceExpanded),
-    liveTraceRows(size.rows, paletteRows),
+  const liveRows = liveTraceRows(size.rows, paletteRows);
+  // Memoised so a per-token draft update does not rebuild the live trace, and
+  // a per-second elapsed tick does not rebuild the draft.
+  const liveLines = React.useMemo(
+    () => tailLines(
+      buildLiveTraceLines(liveTrace, contentWidth, traceExpanded),
+      liveRows,
+    ),
+    [contentWidth, liveRows, liveTrace, traceExpanded],
   );
-  const draftLines = draft
-    ? buildChatLines([draft], contentWidth, traceExpanded)
-    : [];
+  const draftLines = React.useMemo(
+    () => (draft ? buildChatLines([draft], contentWidth, traceExpanded) : []),
+    [contentWidth, draft, traceExpanded],
+  );
   const draftRows = viewportHeight(
     size.rows,
     paletteRows + liveLines.length + (planMode ? 3 : 0),

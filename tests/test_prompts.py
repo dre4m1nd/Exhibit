@@ -113,6 +113,22 @@ def test_non_git_task_has_no_scope_line() -> None:
     assert "请开始只读分析" in prompt
 
 
+def test_user_prompt_includes_the_untracked_hint() -> None:
+    prompt = get_user_prompt(
+        "review_git",
+        {
+            "repo_path": ".",
+            "untracked_hint": "- 未跟踪文件（新增）：a.py",
+        },
+    )
+    assert "- 未跟踪文件（新增）：a.py" in prompt
+    assert "{{" not in prompt
+
+
+def test_user_prompt_without_untracked_hint_has_no_blank_line() -> None:
+    prompt = get_user_prompt("review_git", {"repo_path": "."})
+    assert "{{" not in prompt
+
 def test_plan_prompt_is_read_only_without_edit_rules() -> None:
     prompt = get_chat_prompt(mode="plan", context="用户目标")
 

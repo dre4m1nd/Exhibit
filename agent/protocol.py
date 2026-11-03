@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Literal
+from typing import Any
 
 # TUI -> agent
 MSG_INIT = "init"
@@ -33,8 +33,6 @@ MSG_THINKING = "thinking_delta"
 MSG_COMMAND_RESULT = "command_result"
 MSG_PERMISSION_REQUEST = "permission_request"
 MSG_SESSION = "session"
-
-TaskName = Literal["arch_overview", "arch_audit", "review_repo", "review_git"]
 
 TaskTitles: dict[str, str] = {
     "arch_overview": "架构总览与模块职责",

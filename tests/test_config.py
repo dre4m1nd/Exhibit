@@ -9,9 +9,10 @@ from agent.config import (
     DEFAULT_BASE_URL,
     DEFAULT_MAX_ITERS,
     DEFAULT_MODEL,
+    from_credential,
     load_config,
 )
-from agent.credentials import CONFIG_ENV, save_credential
+from agent.credentials import CONFIG_ENV, SavedCredential, save_credential
 
 
 @pytest.fixture(autouse=True)
@@ -215,3 +216,20 @@ def test_non_remote_endpoints_are_rejected(
 
     with pytest.raises(ValueError):
         load_config()
+
+
+def test_from_credential_reads_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EXHIBIT_MAX_OUTPUT_TOKENS", "900")
+    monkeypatch.setenv("EXHIBIT_TIMEOUT", "12.5")
+    credential = SavedCredential(
+        provider="custom",
+        base_url="https://api.example.com/v1",
+        model="custom-model",
+        api_key="secret",
+    )
+
+    config = from_credential(credential)
+
+    assert config.max_output_tokens == 900
+    assert config.request_timeout == 12.5
+    assert config.model == "custom-model"

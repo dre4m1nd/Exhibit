@@ -323,6 +323,209 @@ def test_chat_once_rejects_an_empty_provider_reply() -> None:
         )
 
 
+
+def test_stream_agent_warns_about_truncation_in_headless_mode() -> None:
+    """A headless report must carry the same truncation note as chat mode."""
+    agent = _FakeReviewAgent(
+        [_delta("## 架构总览\n"), _reply_end("exceed_max_iters")]
+    )
+
+    report = asyncio.run(
+        app_module._stream_agent(
+            agent, "arch_overview", {"repo_path": "."}, Emitter(io.StringIO())
+        )
+    )
+
+    assert report.startswith("## 架构总览")
+    assert "EXHIBIT_MAX_OUTPUT_TOKENS" in report
+
+
+def test_stream_agent_stays_silent_when_the_model_completes() -> None:
+    agent = _FakeReviewAgent([_delta("完整报告"), _reply_end("completed")])
+
+    report = asyncio.run(
+        app_module._stream_agent(
+            agent, "arch_overview", {"repo_path": "."}, Emitter(io.StringIO())
+        )
+    )
+
+    assert report == "完整报告"
+
+
+def test_chat_once_ignores_the_finished_reason() -> None:
+    """Chat replies are conversational, so an early stop needs no note."""
+    agent = _FakeReviewAgent([_delta("好的"), _reply_end("exceed_max_iters")])
+
+    reply = asyncio.run(
+        app_module._chat_once(agent, "你好", Emitter(io.StringIO()))
+    )
+
+    assert reply == "好的"
+
+
+def test_session_config_honours_the_timeout_env(monkeypatch, tmp_path) -> None:
+    credential = SavedCredential(
+        provider="custom",
+        base_url="http://127.0.0.1:3425/v1",
+        model="group/master",
+        api_key="k",
+    )
+    monkeypatch.setattr(
+        app_module, "load_credentials", lambda: {"custom": credential}
+    )
+    monkeypatch.setenv("EXHIBIT_TIMEOUT", "42")
+    monkeypatch.setenv("EXHIBIT_MAX_OUTPUT_TOKENS", "900")
+    store = SessionStore(tmp_path)
+
+    config = app_module._session_config(store)
+
+    assert config is not None
+    assert config.request_timeout == 42
+    assert config.max_output_tokens == 900
+
+
+def test_session_config_reuses_a_configured_session_without_disk(tmp_path) -> None:
+    """Once a session has a credential, no saved file is needed."""
+    store = SessionStore(tmp_path)
+    store.active.configure(
+        SavedCredential(
+            provider="custom",
+            base_url="http://127.0.0.1:3425/v1",
+            model="group/master",
+            api_key="k",
+        )
+    )
+
+    config = app_module._session_config(store)
+
+    assert config is not None
+    assert config.model == "group/master"
+
+
+class _StubChatAgent:
+    """A chat agent whose reply stages one edit before answering."""
+
+    def __init__(self, created: dict, path: str = "new.txt") -> None:
+        self.created = created
+        self.path = path
+
+    async def reply_stream(self, *_args, **_kwargs):
+        editor = self.created["editor"]
+        editor.stage(editor.preview_write(self.path, "hi\n"), editor.session_id)
+        yield _delta("我来写文件")
+
+    def _get_last_msg(self) -> Msg | None:
+        return None
+
+
+def _drive_chat_loop(monkeypatch, tmp_path, messages, path="new.txt") -> tuple:
+    """Run `_chat_loop` against canned protocol lines and a stub agent."""
+    # `_chat_loop` builds its own editor, so capture the instance it uses.
+    created: dict = {}
+    real_editor = app_module.FileEditor
+
+    def capture_editor(root):
+        import sys
+        print("CAP called", file=sys.stderr)
+        created["editor"] = real_editor(root)
+        return created["editor"]
+
+    monkeypatch.setattr(app_module, "FileEditor", capture_editor)
+    monkeypatch.setattr(
+        app_module, "build_chat_agent", lambda *_a, **_k: _StubChatAgent(created, path)
+    )
+    # Drive the real `_session_config` by presenting one saved credential.
+    monkeypatch.setattr(
+        app_module,
+        "load_credentials",
+        lambda: {
+            "custom": SavedCredential(
+                provider="custom",
+                base_url="http://127.0.0.1:3425/v1",
+                model="group/master",
+                api_key="k",
+            )
+        },
+    )
+    # `_chat_loop` writes EXHIBIT_REPO_ROOT directly; let the fixture restore it.
+    monkeypatch.setenv("EXHIBIT_REPO_ROOT", str(tmp_path))
+    stream = io.StringIO("".join(f"{json.dumps(m)}\n" for m in messages))
+    monkeypatch.setattr(app_module.sys, "stdin", stream)
+    output = io.StringIO()
+
+    app_module._chat_loop(tmp_path, Emitter(output))
+
+    return created["editor"], [
+        json.loads(line) for line in output.getvalue().splitlines()
+    ]
+
+
+
+def test_session_scope_approval_trusts_the_session(monkeypatch, tmp_path) -> None:
+    """`scope=session` must persist, so the next edit skips the prompt."""
+    editor, events = _drive_chat_loop(
+        monkeypatch,
+        tmp_path,
+        [
+            {"type": "chat", "text": "写个文件"},
+            {
+                "type": "permission_response",
+                "request_id": "edit-1",
+                "approved": True,
+                "scope": "session",
+            },
+            {"type": "chat", "text": "再写一次"},
+        ],
+    )
+
+    assert editor.is_trusted("main") is True
+    assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "hi\n"
+    requests = [e for e in events if e["type"] == "permission_request"]
+    assert [e["request_id"] for e in requests] == ["edit-1"]
+    assert requests[0]["trusted"] is False
+    assert editor.pending is None
+
+
+def test_stale_permission_response_is_ignored(monkeypatch, tmp_path) -> None:
+    editor, events = _drive_chat_loop(
+        monkeypatch,
+        tmp_path,
+        [
+            {"type": "chat", "text": "写个文件"},
+            {
+                "type": "permission_response",
+                "request_id": "edit-99",
+                "approved": False,
+            },
+        ],
+    )
+
+    assert editor.pending is not None
+    assert any(
+        event.get("text") == "已忽略过期的确认请求" for event in events
+    )
+
+
+def test_rejected_permission_leaves_the_file_untouched(monkeypatch, tmp_path) -> None:
+    editor, _events = _drive_chat_loop(
+        monkeypatch,
+        tmp_path,
+        [
+            {"type": "chat", "text": "写个文件"},
+            {
+                "type": "permission_response",
+                "request_id": "edit-1",
+                "approved": False,
+                "scope": "once",
+            },
+        ],
+    )
+
+    assert editor.pending is None
+    assert editor.is_trusted("main") is False
+    assert not (tmp_path / "new.txt").exists()
+
+
 @pytest.fixture()
 def restore_repo_root():
     """`run()` writes EXHIBIT_REPO_ROOT directly; do not leak it to other tests."""
@@ -337,10 +540,12 @@ def restore_repo_root():
 def test_two_phase_run_uses_the_explore_model_then_a_toolless_report(
     monkeypatch: pytest.MonkeyPatch,
     config: Config,
+    tmp_path,
     restore_repo_root,
 ) -> None:
     """EXHIBIT_EXPLORE_MODEL must split the run without breaking the report."""
     monkeypatch.setenv("EXHIBIT_EXPLORE_MODEL", "auto/free")
+    monkeypatch.setenv("EXHIBIT_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setattr(app_module, "load_config", lambda: config)
     built: list[tuple[str | None, dict]] = []
     streamed: list[dict] = []
@@ -375,9 +580,11 @@ def test_two_phase_run_uses_the_explore_model_then_a_toolless_report(
 def test_single_phase_run_is_unchanged_without_the_env_var(
     monkeypatch: pytest.MonkeyPatch,
     config: Config,
+    tmp_path,
     restore_repo_root,
 ) -> None:
     monkeypatch.delenv("EXHIBIT_EXPLORE_MODEL", raising=False)
+    monkeypatch.setenv("EXHIBIT_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setattr(app_module, "load_config", lambda: config)
     built: list[dict] = []
     monkeypatch.setattr(

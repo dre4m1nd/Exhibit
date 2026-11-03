@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from agent.tools.fs import grep_files, list_dir, read_file
+from agent.tools.fs import grep_files, list_dir, read_file, resolve_repo_path
 from agent.tools.git import (
+    _diff_target_args,
     git_branch_diff,
     git_diff,
     git_log,
@@ -162,6 +163,16 @@ def _init_repo_with_commit(path: Path) -> None:
     )
 
 
+def _porcelain(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "status", "--porcelain=v1"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
 def test_review_scope_reports_a_clean_worktree(tmp_path: Path) -> None:
     _init_repo_with_commit(tmp_path)
 
@@ -264,3 +275,127 @@ def test_git_tools_ignore_the_process_cwd_outside_the_review_root(tmp_path: Path
 
     assert "changed.txt" in status
     assert "noise.txt" not in status
+
+
+def test_git_diff_rejects_flags_that_can_write_files(tmp_path: Path) -> None:
+    _init_repo_with_commit(tmp_path)
+    (tmp_path / "tracked.txt").write_text("two\n", encoding="utf-8")
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("EXHIBIT_REPO_ROOT", str(tmp_path))
+        output = git_diff(".", "--output=pwned.txt")
+    finally:
+        monkeypatch.undo()
+
+    assert output.startswith("错误：")
+    assert not (tmp_path / "pwned.txt").exists()
+
+
+def test_git_diff_rejects_an_out_of_sandbox_repository(tmp_path: Path) -> None:
+    """Reviewing another checkout must fail loudly, not touch its index."""
+    reviewed = tmp_path / "reviewed"
+    other = tmp_path / "other"
+    for repo in (reviewed, other):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        (repo / "note.txt").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "add", "note.txt"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=Test", "-c", "user.email=t@example.com",
+             "commit", "-qm", "init"],
+            cwd=repo,
+            check=True,
+        )
+    (other / "untracked.txt").write_text("new\n", encoding="utf-8")
+    before = _porcelain(other)
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("EXHIBIT_REPO_ROOT", str(reviewed))
+        output = git_diff(str(other))
+    finally:
+        monkeypatch.undo()
+
+    assert output.startswith("错误：")
+    assert _porcelain(other) == before
+
+
+def test_git_diff_keeps_allowed_read_only_flags(tmp_path: Path) -> None:
+    _init_repo_with_commit(tmp_path)
+    (tmp_path / "tracked.txt").write_text("two\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("EXHIBIT_REPO_ROOT", str(tmp_path))
+        staged = git_diff(".", "--cached")
+    finally:
+        monkeypatch.undo()
+
+    assert "+two" in staged
+
+
+def test_git_diff_reports_a_summary_and_the_patch(tmp_path: Path) -> None:
+    """One `git diff --stat --patch` run must carry both blocks."""
+    _init_repo_with_commit(tmp_path)
+    (tmp_path / "tracked.txt").write_text("two\n", encoding="utf-8")
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("EXHIBIT_REPO_ROOT", str(tmp_path))
+        output = git_diff(".")
+    finally:
+        monkeypatch.undo()
+
+    assert "1 file changed" in output
+    assert "diff --git" in output
+
+
+def test_branch_diff_rejects_a_target_that_looks_like_a_flag() -> None:
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("EXHIBIT_REPO_ROOT", str(FIXTURE))
+        output = git_branch_diff(".", base="main --output=pwned")
+    finally:
+        monkeypatch.undo()
+
+    assert output == "错误：不支持的 diff 目标"
+    assert not (FIXTURE / "pwned").exists()
+
+
+def test_diff_target_args_whitelist() -> None:
+    assert _diff_target_args("--cached") == ["--cached"]
+    with pytest.raises(ValueError, match="不支持的 diff 参数"):
+        _diff_target_args("--output=x")
+
+
+def test_repo_below_an_ignored_ancestor_is_still_listed(tmp_path: Path) -> None:
+    """A checkout inside `.../build/` must not look like an empty directory."""
+    repo = tmp_path / "build" / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "app.py").write_text("hello\n", encoding="utf-8")
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("EXHIBIT_REPO_ROOT", str(repo))
+        listing = list_dir(".")
+        matches = grep_files("hello")
+    finally:
+        monkeypatch.undo()
+
+    assert "src/" in listing
+    assert "app.py:1: hello" in matches
+
+
+def test_resolve_repo_path_refuses_to_escape_the_sandbox() -> None:
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("EXHIBIT_REPO_ROOT", str(FIXTURE.resolve()))
+        resolved = resolve_repo_path(".")
+        assert resolved == FIXTURE.resolve()
+        with pytest.raises(ValueError, match="越界"):
+            resolve_repo_path(str(FIXTURE.parent.parent))
+    finally:
+        monkeypatch.undo()
+

@@ -8,7 +8,6 @@ from pathlib import Path
 
 from .credentials import load_credentials, remove_credential
 from .models import discover_model_catalog
-from .permissions import FileEditor
 from .session import (
     SessionStore,
     command_catalog,
@@ -20,8 +19,6 @@ from .session import (
     switch_provider,
     toggle_plan,
 )
-
-READ_ONLY = {"/status", "/permissions", "/files", "/provider", "/plan", "/fork"}
 
 
 def handle_command(
@@ -156,4 +153,4 @@ def _relative_to(root: Path, path: str) -> str:
         return Path(path).name
 
 
-__all__ = ["READ_ONLY", "handle_command"]
+__all__ = ["handle_command"]

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeCommandResult } from "./App.js";
+import { describeCommandResult } from "../formatters.js";
 
 describe("describeCommandResult surfaces every command result", () => {
   it("echoes /logout removal", () => {

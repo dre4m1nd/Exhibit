@@ -81,9 +81,16 @@ def get_user_prompt(task: str, params: dict[str, str]) -> str:
             scope_line = f"审查范围：分支 `{branch}` 相对于其基线的 diff\n"
         else:
             scope_line = "审查范围：工作区未提交的改动（git status + git diff）\n"
+    untracked_hint = params.get("untracked_hint") or ""
+    if untracked_hint and not untracked_hint.endswith("\n"):
+        untracked_hint += "\n"
     return _render(
         _read_prompt("user_prompt.md"),
-        {"repo_path": repo, "scope_line": scope_line},
+        {
+            "repo_path": repo,
+            "scope_line": scope_line,
+            "untracked_hint": untracked_hint,
+        },
     )
 
 

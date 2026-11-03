@@ -58,8 +58,6 @@ class FileEditor:
         if target.exists() and target.is_dir():
             raise ValueError(f"target is a directory: {path}")
         before = _read_text(target) if target.exists() else ""
-        if target.exists() and target.is_dir():
-            raise ValueError(f"target is a directory: {path}")
         encoded = content.encode("utf-8")
         if len(encoded) > MAX_WRITE_BYTES:
             raise ValueError(f"content exceeds {MAX_WRITE_BYTES} bytes")
@@ -146,8 +144,6 @@ class FileEditor:
         history.pop()
         return preview
 
-    def can_undo(self, session_id: str | None = None) -> bool:
-        return bool(self._undo.get(session_id or self._session_id))
 
     @property
     def has_pending(self) -> bool:

@@ -8,6 +8,7 @@ import { LoginDialog, type LoginRequest } from "./LoginDialog.js";
 import { ModelDialog } from "./ModelDialog.js";
 import { PermissionPrompt, type PermissionScope } from "./PermissionPrompt.js";
 import {
+  SLASH_COMMANDS,
   moveSelection,
   parseCommandArgs,
   suggestionsFor,
@@ -20,6 +21,12 @@ import {
 } from "../trace.js";
 import { theme } from "../theme.js";
 import type { AgentMessage } from "../protocol.js";
+import {
+  describeCommandResult,
+  formatArgs,
+  formatStatus,
+  sessionStatus,
+} from "../formatters.js";
 
 type Screen =
   | "chat"
@@ -30,11 +37,17 @@ type Screen =
   | "permission"
   | "confirm";
 /** Commands that ask the user to confirm before reaching the agent. */
-const CONFIRM_COMMANDS = new Set(["/logout", "/clear"]);
-const CONFIRM_HINT: Record<string, string> = {
-  "/logout": "删除当前供应商凭据？输入 y 确认，其它键取消",
-  "/clear": "清空当前对话上下文？输入 y 确认，其它键取消",
-};
+const CONFIRM_COMMANDS = new Set(
+  SLASH_COMMANDS.filter((command) => command.requiresConfirm).map(
+    (command) => command.name,
+  ),
+);
+const CONFIRM_HINTS = new Map(
+  SLASH_COMMANDS.filter((command) => command.confirmHint).map((command) => [
+    command.name,
+    command.confirmHint ?? "",
+  ]),
+);
 
 interface PermissionRequest {
   requestId: string;
@@ -54,16 +67,9 @@ const PERMISSION_STATUS: Record<PermissionScope, string> = {
   reject: "已拒绝修改",
 };
 
-export function App({
-  model,
-  repoPath,
-}: {
-  model: string;
-  repoPath: string;
-}) {
+export function App({ repoPath }: { repoPath: string }) {
   const { exit } = useApp();
   const [screen, setScreen] = useState<Screen>("chat");
-  const [activeModel, setActiveModel] = useState(model);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("就绪 · 输入 / 查看命令");
@@ -87,10 +93,7 @@ export function App({
   const assistantId = useRef<number | null>(null);
   const [traceExpanded, setTraceExpanded] = useState(false);
   const [liveTrace, setLiveTrace] = useState<TraceStep[]>([]);
-  const traceRef = useRef<{ thinking: string; steps: TraceStep[] }>({
-    thinking: "",
-    steps: [],
-  });
+  const traceRef = useRef<{ steps: TraceStep[] }>({ steps: [] });
   const append = useCallback((role: ChatMessage["role"], text: string) => {
     const id = nextId.current++;
     setMessages((previous) => [...previous, { id, role, text }]);
@@ -104,7 +107,7 @@ export function App({
       options: Pick<ChatMessage, "kind" | "ok" | "duration" | "steps" | "collapsedSummary"> = {},
     ) => {
       const id = nextId.current++;
-    setMessages((previous) => [...previous, { id, role, text, ...options }]);
+      setMessages((previous) => [...previous, { id, role, text, ...options }]);
       return id;
     },
     [],
@@ -131,20 +134,28 @@ export function App({
     [],
   );
 
+  // Computed once per input change instead of once per keystroke per view.
+  const suggestions = React.useMemo(
+    () => suggestionsFor(input, planMode),
+    [input, planMode],
+  );
+
+  /** Clear the streaming draft; every terminal event ends one stream. */
+  const resetStream = useCallback(() => {
+    setDraft(null);
+    stream.current = "";
+    assistantId.current = null;
+  }, []);
+
   const takeTrace = useCallback((): Pick<
     ChatMessage,
     "steps" | "collapsedSummary"
   > => {
     const steps = traceRef.current.steps;
-    if (steps.length === 0) {
-      traceRef.current = { thinking: "", steps: [] };
-      setLiveTrace([]);
-      return {};
-    }
-    const summary = summarizeTrace(steps);
-    traceRef.current = { thinking: "", steps: [] };
+    traceRef.current = { steps: [] };
     setLiveTrace([]);
-    return { steps, collapsedSummary: summary };
+    if (steps.length === 0) return {};
+    return { steps, collapsedSummary: summarizeTrace(steps) };
   }, []);
 
   const commitTrace = useCallback(() => {
@@ -191,7 +202,6 @@ export function App({
       if (name === "/login") {
         setScreen("chat");
         setLoginError("");
-        setActiveModel(String(data.model ?? ""));
         append("system", `已登录 ${String(data.provider ?? "")} · ${String(data.model ?? "")}`);
         setStatus("登录成功");
         return;
@@ -232,7 +242,6 @@ export function App({
       }
       if (name === "/model" && data.kind === "model_selected") {
         const selectedModel = String(data.model ?? "");
-        setActiveModel(selectedModel);
         setModelCatalog(null);
         setModelError("");
         setScreen("chat");
@@ -257,7 +266,6 @@ export function App({
         return;
       }
       if (name === "/provider" && data.provider) {
-        setActiveModel(String(data.model ?? ""));
         append(
           "system",
           `已切换为 ${String(data.provider)} · ${String(data.model ?? "")}`,
@@ -300,9 +308,7 @@ export function App({
             commitTrace();
             if (text) commit("assistant", text, { duration });
           }
-          setDraft(null);
-          stream.current = "";
-          assistantId.current = null;
+          resetStream();
           break;
         case "command_result":
           commitTrace();
@@ -331,8 +337,7 @@ export function App({
             commitTrace();
             commit("assistant", message.markdown, { duration });
           }
-          setDraft(null);
-          assistantId.current = null;
+          resetStream();
           break;
         case "error":
           {
@@ -341,8 +346,7 @@ export function App({
             commitTrace();
             commit("system", message.message, { duration });
           }
-          setDraft(null);
-          assistantId.current = null;
+          resetStream();
           if (screenRef.current === "model-busy") {
             setModelError(message.message);
             setScreen("model");
@@ -361,11 +365,11 @@ export function App({
           setStatus(sessionStatus(message.data));
           break;
         case "tool_call":
-          setStatus(`${message.name}(${formatArgs(message.args)})`);
-          addTraceStep({
-            type: "tool",
-            text: `${message.name}(${formatArgs(message.args)})`,
-          });
+          {
+            const call = `${message.name}(${formatArgs(message.args)})`;
+            setStatus(call);
+            addTraceStep({ type: "tool", text: call });
+          }
           break;
         case "tool_result":
           setStatus(`${message.name} → ${message.summary}`);
@@ -385,7 +389,15 @@ export function App({
           break;
       }
     },
-    [addTraceStep, append, commit, commitTrace, finishBusy, handleCommandResult],
+    [
+      addTraceStep,
+      append,
+      commit,
+      commitTrace,
+      finishBusy,
+      handleCommandResult,
+      resetStream,
+    ],
   );
 
   useEffect(() => {
@@ -394,16 +406,20 @@ export function App({
       onMessage: handleMessage,
       onError: (error) => {
         append("system", error.message);
-        setBusy(false);
+        resetStream();
+        finishBusy("出错");
       },
       onExit: (code) => {
-        if (code !== null && code !== 0) {
-          append("system", `智能体进程退出，代码 ${code}`);
-        }
+        append(
+          "system",
+          code === null
+            ? "智能体进程已断开，无法继续发送消息"
+            : `智能体进程退出，代码 ${code}，无法继续发送消息`,
+        );
       },
     });
     return () => bridge.current?.stop();
-  }, [append, handleMessage, repoPath]);
+  }, [append, finishBusy, handleMessage, repoPath, resetStream]);
 
   const submit = useCallback(
     (value: string) => {
@@ -418,9 +434,7 @@ export function App({
         return;
       }
       setFailed(false);
-      setDraft(null);
-      stream.current = "";
-      assistantId.current = null;
+      resetStream();
       setInput("");
       setSelected(-1);
       if (text === "/quit") {
@@ -435,32 +449,21 @@ export function App({
         setScreen("login");
         return;
       }
-      if (text === "/model") {
+      const [name = "", ...rest] = text.split(/\s+/);
+      const command = name.toLowerCase();
+      if (text.startsWith("/") && CONFIRM_COMMANDS.has(command)) {
         append("user", text);
-        setBusy(true);
-        setStatus("正在发现模型…");
-        bridge.current?.sendCommand("/model");
-        return;
-      }
-      if (text.startsWith("/") && CONFIRM_COMMANDS.has((text.split(/\s+/)[0] ?? "").toLowerCase())) {
-        append("user", text);
-        setConfirming((text.split(/\s+/)[0] ?? "").toLowerCase());
+        setConfirming(command);
         return;
       }
       if (text.startsWith("/")) {
         // Echo every slash command so the conversation history shows what
         // was requested, including commands that open a dedicated screen.
         append("user", text);
-        const [name, ...rest] = text.split(/\s+/);
-        if (name === "/model" && rest[0]) {
-          // Preserve direct switching for automation and power users.
-          setBusy(true);
-          setStatus("切换模型");
-          bridge.current?.sendCommand("/model", { model: rest[0] });
-          return;
-        }
+        const args = parseCommandArgs(name, rest);
         setBusy(true);
-        bridge.current?.sendCommand(name ?? "", parseCommandArgs(name ?? "", rest));
+        if (command === "/model" && args.model) setStatus("切换模型");
+        bridge.current?.sendCommand(name, args);
         return;
       }
       append("user", text);
@@ -468,12 +471,12 @@ export function App({
       setStatus("模型推理中…");
       bridge.current?.sendChat(text);
     },
-    [append, busy],
+    [append, busy, resetStream],
   );
 
   useInput(
     (value, key) => {
-      const candidates = suggestionsFor(input, planMode);
+      const candidates = suggestions;
       if (candidates.length > 0) {
         if (key.upArrow) {
           setSelected((current) => moveSelection(current, -1, candidates.length));
@@ -635,7 +638,9 @@ export function App({
           <Text color={theme.warn} bold>
             需要确认 {confirming}
           </Text>
-          <Text color={theme.text}>{CONFIRM_HINT[confirming] ?? "确认执行？"}</Text>
+          <Text color={theme.text}>
+            {CONFIRM_HINTS.get(confirming) ?? "确认执行？"}
+          </Text>
         </Box>
       ) : (
         <ChatViewport
@@ -645,6 +650,7 @@ export function App({
           status={status}
           planMode={planMode}
           busy={busy}
+          suggestions={suggestions}
           selected={selected}
           elapsed={elapsed}
           traceExpanded={traceExpanded}
@@ -657,95 +663,3 @@ export function App({
   );
 }
 
-/**
- * Human-readable result for slash commands that don't open a dedicated screen
- * or stream a report. Returns "" for commands without a meaningful result line
- * so callers can skip echoing. Keeping this pure makes every command's result
- * echoable and unit-testable, and covers commands the chat previously dropped.
- */
-export function describeCommandResult(
-  name: string,
-  data: Record<string, unknown>,
-): string {
-  switch (name) {
-    case "/logout":
-      return `已退出登录 ${String(data.provider ?? "")}`;
-    case "/clear":
-      return "对话上下文已清空";
-    case "/compact":
-      return `已压缩上下文，保留 ${String(data.messages ?? 0)} 条，文件变更：${
-        Array.isArray(data.changed_files)
-          ? (data.changed_files as unknown[]).join(", ") || "无"
-          : "无"
-      }`;
-    case "/permissions":
-      return `模式 ${String(data.mode ?? "")} · 写入权限 ${
-        data.writes ? "开启" : "仅只读"
-      } · 确认策略 ${String(data.confirmation ?? "")}`;
-    case "/files":
-      return `已读 ${formatList(data.read_files)} · 已改 ${formatList(data.changed_files)}`;
-    case "/undo":
-      return data.undone ? `已撤销：${String(data.undone)}` : "没有可撤销的修改";
-    case "/commands":
-      return formatCommands(data.commands);
-    default:
-      return `${name}: ${JSON.stringify(data)}`;
-  }
-}
-
-/** Commands arrive as `{name, description}` objects, not plain strings. */
-function formatCommands(value: unknown): string {
-  const rows = Array.isArray(value) ? (value as unknown[]) : [];
-  const lines = rows
-    .map((item) => {
-      if (item && typeof item === "object") {
-        const record = item as Record<string, unknown>;
-        const name = String(record.name ?? "").trim();
-        const description = String(record.description ?? "").trim();
-        if (name) return description ? `${name} · ${description}` : name;
-      }
-      return String(item ?? "").trim();
-    })
-    .filter((line) => line.length > 0);
-  if (lines.length === 0) return "没有可用命令";
-  return ["可用命令：", ...lines].join("\n");
-}
-
-function formatList(value: unknown, prefix = ""): string {
-  const items = Array.isArray(value)
-    ? (value as unknown[]).map((item) =>
-        item && typeof item === "object" ? JSON.stringify(item) : String(item),
-      )
-    : [];
-  if (items.length === 0) return prefix ? `${prefix}无` : "无";
-  return prefix ? `${prefix}${items.join(", ")}` : items.join(", ");
-}
-
-/**
- * Status-bar text for a session event.
- *
- * Carries the mode plus the provider and model the agent will really call, so
- * the bar never has to guess from environment defaults.
- */
-export function sessionStatus(data: Record<string, unknown>): string {
-  const parts = [String(data.session ?? "main")];
-  if (String(data.mode ?? "") === "plan") parts.push("plan");
-  const provider = String(data.provider ?? "");
-  const model = String(data.model ?? "");
-  if (provider || model) {
-    parts.push([provider, model].filter(Boolean).join(" · "));
-  }
-  return `会话 ${parts.join(" · ")}`;
-}
-
-function formatStatus(data: Record<string, unknown>): string {
-  return Object.entries(data)
-    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`)
-    .join("\n");
-}
-
-function formatArgs(args: Record<string, unknown>): string {
-  return Object.entries(args)
-    .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
-    .join(", ");
-}
