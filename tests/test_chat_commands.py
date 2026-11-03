@@ -12,12 +12,30 @@ from agent.credentials import CONFIG_ENV, load_credentials, save_credential
 from agent.permissions import FileEditor
 from agent.protocol import Emitter
 from agent.session import SessionStore
+from agent.tools.git import GitReviewScope
 
 
 @pytest.fixture(autouse=True)
 def isolated_env(tmp_path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(CONFIG_ENV, str(tmp_path / "config"))
     return tmp_path
+
+
+@pytest.fixture()
+def reviewable_git_scope(monkeypatch: pytest.MonkeyPatch):
+    """Let the git probe see changes, so `review_git` reaches the model.
+
+    Without this the probe sees a clean worktree and ``_run_one_review``
+    short-circuits before the review runs -- correct at runtime, but it leaves
+    the dispatch tests unable to observe the call.
+    """
+    import agent.app as app_module
+
+    monkeypatch.setattr(
+        app_module,
+        "inspect_git_review_scope",
+        lambda *_args, **_kwargs: GitReviewScope(empty=False, message=""),
+    )
 
 
 def test_login_and_status_commands(isolated_env, monkeypatch) -> None:
@@ -127,7 +145,11 @@ def test_review_task_mapping(isolated_env, monkeypatch) -> None:
     assert data == {"task": "arch_audit"}
 
 
-def test_review_accepts_multiple_tasks(isolated_env, monkeypatch) -> None:
+def test_review_accepts_multiple_tasks(
+    isolated_env,
+    monkeypatch,
+    reviewable_git_scope,
+) -> None:
     import agent.app as app_module
 
     store = SessionStore(isolated_env)
@@ -216,6 +238,7 @@ def test_review_normalizes_task_names(
 def test_review_accepts_natural_language_task_names(
     isolated_env,
     monkeypatch: pytest.MonkeyPatch,
+    reviewable_git_scope,
     value: str,
     expected: str,
 ) -> None:
