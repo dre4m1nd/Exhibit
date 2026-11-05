@@ -17,7 +17,6 @@ from pathlib import Path
 from .credentials import config_dir
 from .tools.fs import IGNORED_DIRS
 
-MAX_REPORT_CHARS = 8_000
 MAX_SNAPSHOT_FILES = 20_000
 MAX_LISTED_CHANGES = 20
 # Beyond this share of changed files the old report is more noise than signal.
@@ -68,14 +67,15 @@ def load(repo: str | Path, task: str) -> dict | None:
         return None
 
 
-def save(repo: str | Path, task: str, report: str) -> None:
-    """Store the report and the file snapshot, ignoring write failures."""
+def save(repo: str | Path, task: str) -> None:
+    """Store the file snapshot, ignoring write failures.
+
+    Only the snapshot is kept: injecting the previous report cost ~2k tokens
+    per run and measurably did not reduce exploration (69 -> 79 tool calls).
+    """
     root = Path(repo)
-    if not report.strip():
-        return
     payload = {
         "when": time.strftime("%Y-%m-%d %H:%M"),
-        "report": report[:MAX_REPORT_CHARS],
         "files": _snapshot(root),
     }
     path = _cache_file(root, task)
@@ -104,14 +104,10 @@ def preface(record: dict, repo: str | Path) -> str:
 
     listed = "、".join(changed[:MAX_LISTED_CHANGES]) or "无"
     lines = [
-        f"上次审查记录：{record.get('when', '更早')}，同一仓库，报告摘要如下。",
-        f"- 自上次以来变更 {len(changed)} 个文件、删除 {len(removed)} 个：{listed}"
-        + (" 等" if len(changed) > MAX_LISTED_CHANGES else ""),
-        "- 未变更的部分可以沿用旧结论，本次重点复核变更文件与旧报告中标注「未能确认」的地方；",
-        "  若旧结论与当前代码不符，以当前代码为准并在报告里说明。",
-        "",
-        "上次报告（已截断）：",
-        record.get("report", ""),
+        f"上次审查：{record.get('when', '更早')}。",
+        f"自那时起变更 {len(changed)} 个文件、删除 {len(removed)} 个：{listed}"
+        + (" 等" if len(changed) > MAX_LISTED_CHANGES else "")
+        + "。优先复核这些文件。",
         "",
     ]
     return "\n".join(lines)

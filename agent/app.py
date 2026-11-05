@@ -226,10 +226,10 @@ def _incremental_preface(repo: str | Path, task: str) -> str:
     return review_cache.preface(previous, repo) if previous else ""
 
 
-def _remember_review(repo: str | Path, task: str, report: str) -> None:
-    """Cache the report so the next run of this task can be incremental."""
+def _remember_review(repo: str | Path, task: str) -> None:
+    """Cache the file snapshot so the next run of this task is incremental."""
     if task not in NON_INCREMENTAL_TASKS:
-        review_cache.save(repo, task, report)
+        review_cache.save(repo, task)
 
 
 
@@ -256,7 +256,7 @@ async def run(task: str, params: dict, emitter: Emitter) -> None:
     if not explore_model:
         agent = build_agent(task, config, model_name=model)
         report = await _stream_agent(agent, task, params, emitter, preface=preface)
-        _remember_review(repo_path, task, report)
+        _remember_review(repo_path, task)
         return
 
     # Two phases: a cheap model pays for the exploration context, the main
@@ -283,7 +283,7 @@ async def run(task: str, params: dict, emitter: Emitter) -> None:
             f"{digest or '（取证阶段没有产出内容）'}\n\n"
         ),
     )
-    _remember_review(repo_path, task, report)
+    _remember_review(repo_path, task)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -637,7 +637,7 @@ def _run_one_review(
     report = asyncio.run(_run_chat_review(task, config, params, emitter, preface))
     if report:
         store.active.add_message("assistant", report)
-        _remember_review(root, task, report)
+        _remember_review(root, task)
     if task == "arch_overview" and report:
         store.remember_project_context(report)
     return {"empty": False, "message": ""}
